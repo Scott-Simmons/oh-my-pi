@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Vim `H`/`M`/`L` motions over fresh visible logical prompt lines, including counted linewise operators.
+- Added Vim `H`/`M`/`L` motions over fresh visible logical prompt lines, including counted linewise operators ([#12146](https://github.com/can1357/oh-my-pi/pull/12146) by [@Scott-Simmons](https://github.com/Scott-Simmons)).
 
 ## [18.2.0] - 2026-09-15
 

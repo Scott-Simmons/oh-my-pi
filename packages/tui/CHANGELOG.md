@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added Normal-mode `R` for grapheme-safe Replace editing, with reversible Backspace, atomic placeholder protection, split Unicode input, and one undo unit per contiguous overwrite segment. Replace arrow navigation stays within the current draft instead of browsing prompt history.
+- Added Normal-mode `R` for grapheme-safe Replace editing, with reversible Backspace, atomic placeholder protection, split Unicode input, and one undo unit per contiguous overwrite segment. Replace arrow navigation stays within the current draft instead of browsing prompt history. ([#12143](https://github.com/can1357/oh-my-pi/pull/12143) by [@Scott-Simmons](https://github.com/Scott-Simmons))
 
 ## [18.2.0] - 2026-09-15
 

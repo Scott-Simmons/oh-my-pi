@@ -4,7 +4,7 @@
 
 ### Added
 
-- Added built-in Vim Replace mode with `R`, a `REPLACE` status label, theme-aware mode icons and border color, and block cursor styling.
+- Added built-in Vim Replace mode with `R`, a `REPLACE` status label, theme-aware mode icons and border color, and block cursor styling. ([#12143](https://github.com/can1357/oh-my-pi/pull/12143) by [@Scott-Simmons](https://github.com/Scott-Simmons))
 
 - Sloppy edits support `<SM:AFTER>` to insert new lines after an anchor without repeating or replacing it.
 

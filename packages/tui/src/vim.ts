@@ -7,11 +7,11 @@ import { getSegmenter, moveWordLeft, moveWordRight } from "./utils";
  * wants applied, so motions can be unit-tested without a terminal and the editor keeps sole
  * ownership of undo, atomic placeholder tokens, the kill ring, and `onChange`.
  *
- * This is a usable subset of Vim, not a reimplementation of it (see issue #3299): Normal and Visual
- * modes, the common motions, and operators built from those motions.
+ * This is a usable subset of Vim, not a reimplementation of it (see issue #3299): modal editing,
+ * common motions, and operators built from those motions.
  */
 
-export type VimMode = "insert" | "normal" | "visual" | "visual-line";
+export type VimMode = "insert" | "normal" | "visual" | "visual-line" | "replace";
 
 export type VimOperator = "d" | "y" | "c";
 
@@ -25,6 +25,7 @@ export interface VimBuffer {
 	readonly lines: readonly string[];
 	readonly cursorLine: number;
 	readonly cursorCol: number;
+	readonly visibleLines?: readonly number[];
 }
 
 /**
@@ -37,8 +38,16 @@ export type VimCommand =
 	| { kind: "yank"; from: VimPosition; to: VimPosition; linewise: boolean }
 	| { kind: "delete"; from: VimPosition; to: VimPosition; linewise: boolean; insert: boolean }
 	| { kind: "openLine"; below: boolean }
-	| { kind: "paste"; after: boolean; count: number }
-	| { kind: "undo" };
+	| {
+			kind: "paste";
+			after: boolean;
+			count: number;
+			selection?: { from: VimPosition; to: VimPosition; linewise: boolean };
+	  }
+	| { kind: "undo" }
+	| { kind: "undoLine" }
+	| { kind: "join"; fromLine: number; toLine: number }
+	| { kind: "case"; from: VimPosition; to: VimPosition; linewise: boolean; upper: boolean };
 
 const segmenter = getSegmenter();
 
@@ -261,6 +270,96 @@ interface Motion {
 	linewise: boolean;
 }
 
+type FindKey = "f" | "F" | "t" | "T";
+
+interface CharacterFind {
+	key: FindKey;
+	target: string;
+}
+
+/** Whitespace-delimited WORD motions, walking graphemes without flattening the buffer. */
+function bigWordMotion(
+	buf: VimBuffer,
+	key: "W" | "B" | "E",
+	count: number,
+	change: boolean,
+	operator: boolean,
+): VimPosition {
+	let line = buf.cursorLine;
+	let col = buf.cursorCol;
+	const text = (): string => buf.lines[line] ?? "";
+	let segments = segmenter.segment(text());
+	const nextCol = (at: number): number => {
+		const segment = segments.containing(at);
+		return segment === undefined ? text().length : segment.index + segment.segment.length;
+	};
+	const previousCol = (at: number): number => segments.containing(at - 1)?.index ?? 0;
+	const space = (): boolean => col >= text().length || /\s/u.test(text().charAt(col));
+	const next = (): boolean => {
+		if (col < text().length) {
+			col = nextCol(col);
+			return true;
+		}
+		if (line === buf.lines.length - 1) return false;
+		line++;
+		col = 0;
+		segments = segmenter.segment(text());
+		return true;
+	};
+	const previous = (): boolean => {
+		if (col > 0) {
+			col = previousCol(col);
+			return true;
+		}
+		if (line === 0) return false;
+		line--;
+		segments = segmenter.segment(text());
+		col = previousCol(text().length);
+		return true;
+	};
+
+	for (let i = 0; i < count; i++) {
+		const beforeLine = line;
+		const beforeCol = col;
+		if (change && i === 0 && text().length === 0) continue;
+		if (key === "B") {
+			if (!previous()) break;
+			while (space() && text().length > 0) {
+				if (!previous()) break;
+			}
+			while (col > 0) {
+				const prev = previousCol(col);
+				if (/\s/u.test(text().charAt(prev))) break;
+				col = prev;
+			}
+		} else if (key === "W" && !change) {
+			while (!space()) next();
+			while (space()) {
+				// On an operator's final step, a WORD at the line end does not take the newline.
+				if (i === count - 1 && text().length > 0 && col >= text().length && operator) return { line, col };
+				if (!next()) break;
+				// An empty line is a WORD boundary, unlike a whitespace-only line.
+				if (text().length === 0 && line !== beforeLine) break;
+			}
+		} else {
+			// `cW` includes the current WORD, even when only its final grapheme remains.
+			if (!(change && i === 0) && !next()) break;
+			while (space()) {
+				if (!next()) break;
+			}
+			if (!space()) {
+				let end = nextCol(col);
+				while (end < text().length && !/\s/u.test(text().charAt(end))) {
+					col = end;
+					end = nextCol(col);
+				}
+			}
+		}
+		if (line === beforeLine && col === beforeCol && !(change && i === 0)) break;
+	}
+	return { line, col };
+}
+
 export class VimState {
 	mode: VimMode = "normal";
 	/** Fixed end of a Visual selection; the cursor is the moving end. */
@@ -268,6 +367,9 @@ export class VimState {
 
 	#count = "";
 	#operator: VimOperator | null = null;
+	#operatorCount = "";
+	#find: FindKey | null = null;
+	#lastFind: CharacterFind | null = null;
 	#pendingG = false;
 	/** `i` or `a` typed after an operator or in Visual mode — waiting for the object key. */
 	#textObject: "i" | "a" | null = null;
@@ -279,9 +381,15 @@ export class VimState {
 	 */
 	#desiredCol: number | null = null;
 
-	/** True while a count, operator, `g`, or text-object prefix is half-typed — Escape cancels it. */
+	/** True while a count, operator, motion, or text-object prefix is half-typed. */
 	get pending(): boolean {
-		return this.#count.length > 0 || this.#operator !== null || this.#pendingG || this.#textObject !== null;
+		return (
+			this.#count.length > 0 ||
+			this.#operator !== null ||
+			this.#pendingG ||
+			this.#textObject !== null ||
+			this.#find !== null
+		);
 	}
 
 	/**
@@ -290,7 +398,7 @@ export class VimState {
 	 * visible instead of silently swallowing the next keystroke.
 	 */
 	get pendingText(): string {
-		return `${this.#count}${this.#operator ?? ""}${this.#pendingG ? "g" : ""}${this.#textObject ?? ""}`;
+		return `${this.#operatorCount}${this.#operator ?? ""}${this.#count}${this.#pendingG ? "g" : ""}${this.#textObject ?? ""}${this.#find ?? ""}`;
 	}
 
 	get visual(): boolean {
@@ -301,20 +409,30 @@ export class VimState {
 		this.mode = "normal";
 		this.anchor = null;
 		this.#desiredCol = null;
+		this.#lastFind = null;
 		this.#clearPending();
 	}
 
 	#clearPending(): void {
 		this.#count = "";
 		this.#operator = null;
+		this.#operatorCount = "";
+		this.#find = null;
 		this.#pendingG = false;
 		this.#textObject = null;
 	}
 
+	#peekCount(): number {
+		const prefix = this.#operatorCount.length > 0 ? Number.parseInt(this.#operatorCount, 10) : 1;
+		const suffix = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		return Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, prefix * suffix));
+	}
+
 	#takeCount(): number {
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
 		this.#count = "";
-		return Math.max(1, count);
+		this.#operatorCount = "";
+		return count;
 	}
 
 	/** Clamp a position so the Normal-mode cursor rests *on* a grapheme rather than past the last. */
@@ -333,7 +451,15 @@ export class VimState {
 	 */
 	handleKey(key: string, buf: VimBuffer): VimCommand[] | null {
 		if (key === "escape") return this.#handleEscape(buf);
-		if (this.mode === "insert") return null;
+		if (this.mode === "insert" || this.mode === "replace") return null;
+
+		// A find target is literal, including digits and command-prefix characters.
+		if (this.#find !== null) {
+			const find = { key: this.#find, target: key };
+			this.#find = null;
+			this.#lastFind = find;
+			return this.#applyFind(buf, find, false);
+		}
 
 		// Count prefix. `0` is the line-start motion unless it extends a count already being typed.
 		if ((key >= "1" && key <= "9") || (key === "0" && this.#count.length > 0)) {
@@ -369,6 +495,20 @@ export class VimState {
 		// the `g` prefix returned above, so `2j` still continues an established column.
 		if (key !== "j" && key !== "k") this.#desiredCol = null;
 
+		if (key === "f" || key === "F" || key === "t" || key === "T") {
+			this.#find = key;
+			return [];
+		}
+		if (key === ";" || key === ",") {
+			if (this.#lastFind === null) {
+				this.#clearPending();
+				return [];
+			}
+			const find = this.#lastFind;
+			const reverse = find.key === "f" ? "F" : find.key === "F" ? "f" : find.key === "t" ? "T" : "t";
+			return this.#applyFind(buf, key === "," ? { key: reverse, target: find.target } : find, true);
+		}
+
 		const motion = this.#resolveMotion(key, buf);
 		if (motion) return this.#applyMotion(buf, motion);
 
@@ -388,7 +528,7 @@ export class VimState {
 				{ kind: "move", to: this.#clampNormal(buf, cursorOf(buf)) },
 			];
 		}
-		if (this.mode === "insert") {
+		if (this.mode === "insert" || this.mode === "replace") {
 			this.mode = "normal";
 			const text = buf.lines[buf.cursorLine] ?? "";
 			return [
@@ -400,20 +540,64 @@ export class VimState {
 		return null;
 	}
 
+	#applyFind(buf: VimBuffer, find: CharacterFind, repeat: boolean): VimCommand[] {
+		const text = buf.lines[buf.cursorLine] ?? "";
+		const forward = find.key === "f" || find.key === "t";
+		const till = find.key === "t" || find.key === "T";
+		const adjacent = forward ? nextGraphemeStart(text, buf.cursorCol) : prevGraphemeStart(text, buf.cursorCol);
+		let remaining = this.#peekCount();
+		let found = -1;
+		if (forward) {
+			for (const segment of segmenter.segment(text)) {
+				if (segment.index <= buf.cursorCol || (repeat && till && segment.index === adjacent)) continue;
+				if (segment.segment === find.target && --remaining === 0) {
+					found = segment.index;
+					break;
+				}
+			}
+		} else {
+			// Count matches first so the reverse search needs no grapheme array.
+			let matches = 0;
+			for (const segment of segmenter.segment(text)) {
+				if (segment.index >= buf.cursorCol) break;
+				if (repeat && till && segment.index === adjacent) continue;
+				if (segment.segment === find.target) matches++;
+			}
+			remaining = matches - remaining;
+			if (remaining >= 0) {
+				for (const segment of segmenter.segment(text)) {
+					if (segment.index >= buf.cursorCol) break;
+					if (repeat && till && segment.index === adjacent) continue;
+					if (segment.segment === find.target && remaining-- === 0) {
+						found = segment.index;
+						break;
+					}
+				}
+			}
+		}
+		if (found < 0) {
+			this.#clearPending();
+			return [];
+		}
+		const col = till ? (forward ? prevGraphemeStart(text, found) : nextGraphemeStart(text, found)) : found;
+		return this.#applyMotion(buf, { to: { line: buf.cursorLine, col }, inclusive: forward, linewise: false });
+	}
+
 	#resolveMotion(key: string, buf: VimBuffer): Motion | null {
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
 		const line = buf.lines[buf.cursorLine] ?? "";
 		const at = (col: number): VimPosition => ({ line: buf.cursorLine, col });
+		if (key === " ") key = "l";
 
-		switch (key === " " ? "l" : key) {
+		switch (key) {
 			case "h": {
 				let col = buf.cursorCol;
-				for (let i = 0; i < count; i++) col = prevGraphemeStart(line, col);
+				for (let i = 0; i < count && col > 0; i++) col = prevGraphemeStart(line, col);
 				return { to: at(col), inclusive: false, linewise: false };
 			}
 			case "l": {
 				let col = buf.cursorCol;
-				for (let i = 0; i < count; i++) col = nextGraphemeStart(line, col);
+				for (let i = 0; i < count && col < line.length; i++) col = nextGraphemeStart(line, col);
 				return { to: at(col), inclusive: false, linewise: false };
 			}
 			case "j":
@@ -433,29 +617,86 @@ export class VimState {
 				// Sticky end-of-line, so `$j` lands on the end of each line rather than a fixed column.
 				this.#desiredCol = Number.POSITIVE_INFINITY;
 				return { to: at(line.length), inclusive: false, linewise: false };
+			case "W":
+			case "B":
+			case "E": {
+				const change =
+					key === "W" &&
+					this.#operator === "c" &&
+					(line.length === 0 || (buf.cursorCol < line.length && !/\s/u.test(line.charAt(buf.cursorCol))));
+				const to = bigWordMotion(buf, key, count, change, this.#operator !== null);
+				const firstTextCol = line.search(/\S/u);
+				const leading = buf.cursorCol <= (firstTextCol < 0 ? line.length : firstTextCol);
+				if (key === "W" && !change && this.#operator !== null && to.line > buf.cursorLine && to.col === 0) {
+					// An exclusive column-zero endpoint stops at the previous line's end.
+					// Starting in leading whitespace promotes that span to whole lines.
+					const endLine = to.line - 1;
+					return {
+						to: { line: endLine, col: (buf.lines[endLine] ?? "").length },
+						inclusive: false,
+						linewise: leading,
+					};
+				}
+				return {
+					to,
+					inclusive: key === "E" || change,
+					linewise:
+						key === "W" &&
+						this.#operator === "d" &&
+						leading &&
+						to.line > buf.cursorLine &&
+						to.col === (buf.lines[to.line] ?? "").length,
+				};
+			}
 			case "w": {
 				let col = buf.cursorCol;
 				// Vim's `cw` quirk: standing on a non-blank, it changes to the end of the word like
 				// `ce` rather than swallowing the whitespace that follows it.
 				if (this.#operator === "c" && !/\s/.test(line.charAt(col))) {
-					for (let i = 0; i < count; i++) col = wordEnd(line, col);
+					for (let i = 0; i < count; i++) {
+						const next = wordEnd(line, col);
+						if (next === col) break;
+						col = next;
+					}
 					return { to: at(col), inclusive: true, linewise: false };
 				}
-				for (let i = 0; i < count; i++) col = wordForward(line, col);
+				for (let i = 0; i < count && col < line.length; i++) col = wordForward(line, col);
 				return { to: at(col), inclusive: false, linewise: false };
 			}
 			case "b": {
 				let col = buf.cursorCol;
-				for (let i = 0; i < count; i++) col = moveWordLeft(line, col);
+				for (let i = 0; i < count && col > 0; i++) col = moveWordLeft(line, col);
 				return { to: at(col), inclusive: false, linewise: false };
 			}
 			case "e": {
 				let col = buf.cursorCol;
-				for (let i = 0; i < count; i++) col = wordEnd(line, col);
+				for (let i = 0; i < count; i++) {
+					const next = wordEnd(line, col);
+					if (next === col) break;
+					col = next;
+				}
 				return { to: at(col), inclusive: true, linewise: false };
 			}
+			case "H":
+			case "M":
+			case "L": {
+				const visible = buf.visibleLines;
+				const length = visible?.length || buf.lines.length;
+				const index =
+					key === "M"
+						? Math.floor((length - 1) / 2)
+						: key === "H"
+							? Math.min(count - 1, length - 1)
+							: Math.max(0, length - count);
+				const target = visible?.length ? visible[index]! : index;
+				return {
+					to: { line: target, col: firstNonBlank(buf.lines[target] ?? "") },
+					inclusive: false,
+					linewise: true,
+				};
+			}
 			case "G": {
-				const target = this.#count.length > 0 ? count - 1 : buf.lines.length - 1;
+				const target = this.#count.length > 0 || this.#operatorCount.length > 0 ? count - 1 : buf.lines.length - 1;
 				return {
 					to: { line: Math.max(0, Math.min(target, buf.lines.length - 1)), col: 0 },
 					inclusive: false,
@@ -587,12 +828,21 @@ export class VimState {
 
 	#handleNormalKey(key: string, buf: VimBuffer): VimCommand[] | null {
 		const line = buf.lines[buf.cursorLine] ?? "";
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
+
+		if (this.#operator !== null && key !== this.#operator && key !== "g") {
+			this.#clearPending();
+			return [];
+		}
 
 		switch (key) {
 			case "g":
 				this.#pendingG = true;
 				return [];
+			case "R":
+				this.#clearPending();
+				this.mode = "replace";
+				return [{ kind: "mode", mode: "replace" }];
 			case "i":
 				this.#takeCount();
 				this.mode = "insert";
@@ -647,6 +897,30 @@ export class VimState {
 					},
 				];
 			}
+			case "X": {
+				this.#takeCount();
+				let col = buf.cursorCol;
+				for (let i = 0; i < count && col > 0; i++) col = prevGraphemeStart(line, col);
+				if (col === buf.cursorCol) return [];
+				return this.#operate("d", { line: buf.cursorLine, col }, cursorOf(buf), false);
+			}
+			case "S":
+			case "Y": {
+				const last = Math.min(buf.cursorLine + this.#takeCount() - 1, buf.lines.length - 1);
+				const from = { line: buf.cursorLine, col: 0 };
+				const to = { line: last, col: (buf.lines[last] ?? "").length };
+				return key === "Y" ? [{ kind: "yank", from, to, linewise: true }] : this.#operate("c", from, to, true);
+			}
+			case "J": {
+				const span = Math.max(2, this.#takeCount());
+				return [
+					{
+						kind: "join",
+						fromLine: buf.cursorLine,
+						toLine: Math.min(buf.cursorLine + span - 1, buf.lines.length - 1),
+					},
+				];
+			}
 			case "D":
 			case "C": {
 				// Like Vim, `D`/`C` take a count: `2D` deletes to the end of the next line, not just
@@ -675,6 +949,8 @@ export class VimState {
 						true,
 					);
 				}
+				this.#operatorCount = this.#count;
+				this.#count = "";
 				this.#operator = key;
 				return [];
 			case "p":
@@ -683,6 +959,9 @@ export class VimState {
 			case "u":
 				this.#takeCount();
 				return [{ kind: "undo" }];
+			case "U":
+				this.#takeCount();
+				return [{ kind: "undoLine" }];
 			default:
 				// Normal mode swallows unknown printable keys rather than typing them into the buffer.
 				this.#clearPending();
@@ -694,6 +973,8 @@ export class VimState {
 		const anchor = this.anchor ?? { line: buf.cursorLine, col: buf.cursorCol };
 		const linewise = this.mode === "visual-line";
 
+		// Visual commands consume counts too; motions have already handled theirs.
+		const count = this.#takeCount();
 		switch (key) {
 			case "v":
 			case "V": {
@@ -709,22 +990,75 @@ export class VimState {
 				this.mode = next;
 				return [{ kind: "mode", mode: next }];
 			}
-			case "o": {
+			case "o":
+			case "O": {
 				this.anchor = { line: buf.cursorLine, col: buf.cursorCol };
 				return [{ kind: "move", to: anchor }];
+			}
+			case "g":
+				this.#pendingG = true;
+				if (count > 1) this.#count = String(count);
+				return [];
+			case "U":
+			case "u": {
+				const { from, to } = visualRange(buf, anchor, linewise);
+				this.#clearPending();
+				this.anchor = null;
+				this.mode = "normal";
+				return [
+					{ kind: "case", from, to, linewise, upper: key === "U" },
+					{ kind: "mode", mode: "normal" },
+				];
+			}
+			case "J": {
+				this.#clearPending();
+				this.anchor = null;
+				this.mode = "normal";
+				return [
+					{
+						kind: "join",
+						fromLine: Math.min(anchor.line, buf.cursorLine),
+						toLine: Math.max(anchor.line, buf.cursorLine),
+					},
+					{ kind: "mode", mode: "normal" },
+				];
+			}
+			case "p":
+			case "P": {
+				const selection = { ...visualRange(buf, anchor, linewise), linewise };
+				this.#clearPending();
+				this.anchor = null;
+				this.mode = "normal";
+				return [
+					{ kind: "paste", after: false, count, selection },
+					{ kind: "mode", mode: "normal" },
+				];
 			}
 			case "y":
 			case "d":
 			case "x":
 			case "c":
-			case "s": {
-				const operator: VimOperator = key === "y" ? "y" : key === "c" || key === "s" ? "c" : "d";
-				const { from, to } = visualRange(buf, anchor, linewise);
+			case "s":
+			case "D":
+			case "X":
+			case "Y":
+			case "S":
+			case "C":
+			case "R": {
+				const operator: VimOperator =
+					key === "y" || key === "Y"
+						? "y"
+						: key === "c" || key === "s" || key === "S" || key === "C" || key === "R"
+							? "c"
+							: "d";
+				const wholeLines =
+					linewise || key === "D" || key === "X" || key === "Y" || key === "S" || key === "C" || key === "R";
+				const { from, to } = visualRange(buf, anchor, wholeLines);
 				this.#clearPending();
 				this.anchor = null;
 				// `#operate` switches to Insert itself for `c`; everything else drops back to Normal.
 				if (operator !== "c") this.mode = "normal";
-				const commands = this.#operate(operator, from, to, linewise);
+				const commands = this.#operate(operator, from, to, wholeLines);
 				return operator === "c" ? commands : [...commands, { kind: "mode", mode: "normal" }];
 			}
 			default:

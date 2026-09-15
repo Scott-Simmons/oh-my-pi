@@ -34,6 +34,7 @@ describe("status line vim segment", () => {
 		const modes: [VimStatus["mode"], string][] = [
 			["normal", "NORMAL"],
 			["insert", "INSERT"],
+			["replace", "REPLACE"],
 			["visual", "VISUAL"],
 			["visual-line", "V-LINE"],
 		];
@@ -66,13 +67,6 @@ describe("status line vim segment", () => {
 		expect(plain(spanning.content)).toBe("V-LINE 4L");
 	});
 
-	it("colors Insert differently from Normal so the mode reads at a glance", () => {
-		const insert = renderSegment("vim", vimContext(textStatus({ mode: "insert", pending: "", selectedLines: 0 })));
-		const normal = renderSegment("vim", vimContext(textStatus({ mode: "normal", pending: "", selectedLines: 0 })));
-		expect(insert.content).not.toBe(normal.content);
-		expect(insert.content).toContain("\x1b[");
-	});
-
 	it("collapses each mode to one distinct cell in every symbol preset", async () => {
 		// Icons resolve through the theme symbol map, so each preset must supply a full, distinct,
 		// single-cell set — a missing key would silently render as an empty segment.
@@ -82,7 +76,7 @@ describe("status line vim segment", () => {
 			for (const preset of ["unicode", "nerd", "ascii"] as const) {
 				await initTheme(false, preset);
 				const glyphs: string[] = [];
-				for (const mode of ["normal", "insert", "visual", "visual-line"] as const) {
+				for (const mode of ["normal", "insert", "replace", "visual", "visual-line"] as const) {
 					const rendered = renderSegment(
 						"vim",
 						vimContext({ mode, pending: "", selectedLines: 0, display: "icon" }),

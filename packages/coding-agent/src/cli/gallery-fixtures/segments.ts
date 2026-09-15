@@ -250,6 +250,10 @@ function variantsFor(id: StatusLineSegmentId): readonly SegmentVariantSpec[] {
 					context: { vim: { mode: "insert", pending: "", selectedLines: 0, display: "text" } },
 				},
 				{
+					label: "replace",
+					context: { vim: { mode: "replace", pending: "", selectedLines: 0, display: "text" } },
+				},
+				{
 					label: "visual with count",
 					context: { vim: { mode: "visual-line", pending: "2d", selectedLines: 4, display: "text" } },
 				},

@@ -5,6 +5,7 @@
 ### Added
 
 - Sloppy edits support `<SM:AFTER>` to insert new lines after an anchor without repeating or replacing it.
+- Expanded the opt-in Vim prompt editor with uppercase motions and editing commands, Replace mode, and additional Visual operations. Replace shows `REPLACE` (or the theme's `icon.vimReplace` symbol), an error-colored prompt border and status label, and a block cursor.
 
 ### Changed
 

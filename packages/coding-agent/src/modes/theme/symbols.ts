@@ -128,6 +128,7 @@ export type SymbolKey =
 	// Vim modes
 	| "icon.vimNormal"
 	| "icon.vimInsert"
+	| "icon.vimReplace"
 	| "icon.vimVisual"
 	| "icon.vimVisualLine"
 	// Slash-command type indicators (autocomplete); names without an existing
@@ -490,6 +491,7 @@ const UNICODE_SYMBOLS: SymbolMap = {
 	// Normal echo the cursor each mode draws (a bar and a block).
 	"icon.vimNormal": "■",
 	"icon.vimInsert": "▎",
+	"icon.vimReplace": "↺",
 	"icon.vimVisual": "◉",
 	"icon.vimVisualLine": "≡",
 	// Slash-command type indicators
@@ -881,6 +883,7 @@ const NERD_SYMBOLS: SymbolMap = {
 	"icon.vimNormal": "\uf0c8",
 	// pick:  (nf-fa-pencil) | alt:  (nf-fa-i_cursor, clipped by short rows)
 	"icon.vimInsert": "\uf040",
+	"icon.vimReplace": "\uf021",
 	// pick:  (nf-fa-eye) | alt:  (nf-fa-dot_circle)
 	"icon.vimVisual": "\uf06e",
 	// pick:  (nf-fa-bars) | alt:  (nf-fa-align_left)
@@ -1221,6 +1224,7 @@ const ASCII_SYMBOLS: SymbolMap = {
 	// Vim modes
 	"icon.vimNormal": "N",
 	"icon.vimInsert": "I",
+	"icon.vimReplace": "R",
 	"icon.vimVisual": "V",
 	"icon.vimVisualLine": "L",
 	// Slash-command type indicators — unused; the icon column is disabled in ASCII mode

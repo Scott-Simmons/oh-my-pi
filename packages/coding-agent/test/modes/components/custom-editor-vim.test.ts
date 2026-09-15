@@ -55,6 +55,33 @@ describe("CustomEditor vim mode", () => {
 		expect(editor.getText()).toBe("alfa beta");
 	});
 
+	it("leaves Replace mode before allowing Escape to interrupt the app", () => {
+		const { editor, state } = makeEditor(true);
+		editor.setText("draft");
+		editor.handleInput(ESC);
+		editor.handleInput("0R");
+		editor.handleInput("D");
+		expect(editor.getText()).toBe("Draft");
+		expect(editor.vimMode).toBe("replace");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(0);
+		expect(editor.vimMode).toBe("normal");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(1);
+	});
+
+	it("cancels a pending character find before allowing Escape to interrupt", () => {
+		const { editor, state } = makeEditor(true);
+		editor.setText("draft");
+		editor.handleInput(ESC);
+		editor.handleInput("F");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(0);
+		expect(editor.vimPending).toBe("");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(1);
+	});
+
 	it("keeps the space bar as a motion in normal mode instead of push-to-talk", () => {
 		const { editor } = makeEditor(true);
 		const gestures: string[] = [];

@@ -73,14 +73,17 @@ Off by default. Turn it on with **Vim Editing Mode** in `/settings` (Interaction
 tui.vimMode: true
 ```
 
-The prompt then starts in Insert mode and behaves exactly as it always has. `Escape` switches to Normal mode; the prompt border changes color so the current mode is visible at a glance. While Vim mode is on, Insert draws a bar cursor and Normal/Visual a block — the software cursor always, the real terminal cursor via DECSCUSR under `PI_HARDWARE_CURSOR` — overriding the terminal's configured shape until the session restores it on exit. This is a useful subset of Vim, not a full implementation — enough for keyboard-only navigation and selection without adding more `Ctrl` chords that terminals, shells, and tmux already claim.
+The prompt then starts in Insert mode and behaves exactly as it always has. `Escape` switches to Normal mode; the prompt border changes color so the current mode is visible at a glance. While Vim mode is on, Insert draws a bar cursor and Normal/Replace/Visual a block — the software cursor always, the real terminal cursor via DECSCUSR under `PI_HARDWARE_CURSOR` — overriding the terminal's configured shape until the session restores it on exit. This is a useful subset of Vim, not a full implementation — enough for keyboard-only navigation and selection without adding more `Ctrl` chords that terminals, shells, and tmux already claim.
 
-| Mode        | Enter with              | Leave with                                              |
-| ----------- | ----------------------- | ------------------------------------------------------- |
-| Insert      | `i` `a` `I` `A` `o` `O` | `Escape`                                                |
-| Normal      | `Escape` from Insert    | any Insert-mode key                                     |
-| Visual      | `v`                     | `Escape`, or an operator (`y` `d` `c`)                  |
-| Visual line | `V`                     | `Escape`, or an operator (`y` `d` `c`)                  |
+| Mode        | Enter with                         | Leave with                              |
+| ----------- | ---------------------------------- | --------------------------------------- |
+| Insert      | `i` `a` `I` `A` `o` `O`, or change | `Escape`                                |
+| Normal      | `Escape` from another mode          | an Insert, Replace, or Visual entry key |
+| Replace     | `R` in Normal                      | `Escape`                                |
+| Visual      | `v`                                | `Escape`, or a selection operation      |
+| Visual line | `V`                                | `Escape`, or a selection operation      |
+
+The `vim` status-line segment shows `INSERT`, `NORMAL`, `REPLACE`, `VISUAL`, or `V-LINE`, plus pending commands and Visual selection height. `tui.vimModeDisplay` selects `text`, `icon`, or `none`; custom status-line presets can include `"vim"` in `statusLine.leftSegments`. Replace uses the theme's error color (red by default) for its prompt border and status label, and `icon.vimReplace` for icon display. Like the other mode icons, this symbol follows the active symbol preset and can be overridden in a theme's `symbols` map.
 
 ### Normal mode
 
@@ -89,16 +92,39 @@ The prompt then starts in Insert mode and behaves exactly as it always has. `Esc
 | `h` `j` `k` `l`               | Move by character and line (arrow keys work too)               |
 | `0` `^` `$`                   | Line start / first non-blank / line end                        |
 | `w` `b` `e`                   | Next word, previous word, end of word                          |
+| `W` `B` `E`                   | Next WORD, previous WORD, end of WORD; whitespace-delimited, including punctuation and slashes, across lines |
 | `gg` `G`                      | First line, last line (`5gg` and `5G` jump to line 5)          |
+| `H` `M` `L`                   | First / middle / last visible prompt line; `2H` is the second visible line, `2L` the second from the bottom |
+| `f{char}` `F{char}`            | Find the next / previous occurrence of a character on the current line |
+| `t{char}` `T{char}`            | Move just before the next / just after the previous occurrence on the current line |
+| `;` `,`                       | Repeat the last character find in its original / opposite direction |
 | `1`–`9` prefix                | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`            |
 | `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
 | `o` `O`                       | Open a line below / above and insert                           |
-| `x` `D` `C`                   | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise) |
+| `x` `X`                       | Delete the current / previous grapheme; `X` never crosses the line start |
+| `D` `C`                       | Delete / change to line end (`2D` and `2C` extend through the next line) |
+| `S`                           | Change whole lines, like `cc`; a count changes that many lines |
+| `Y`                           | Yank whole lines, like classic Vim `yy` (not `y$`); accepts a count |
+| `J`                           | Join with the next line; a count selects the number of lines to join |
+| `R`                           | Enter Replace mode |
 | `d` `y` `c` + motion          | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`             |
 | `dd` `yy` `cc`                | Linewise delete / yank / change                                |
 | `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
 | `p` `P`                       | Put the last yank or delete after / before the cursor          |
 | `u`                           | Undo                                                            |
+| `U`                           | Restore the current line's baseline; repeating `U` toggles the restoration |
+
+`H`/`M`/`L` use visible **logical lines of the prompt**, not transcript lines or individual wrapped screen rows. Counts apply to `H` and `L`. Character finds and their `;`/`,` repeats also accept counts and work as operator or Visual motions.
+
+`J` removes the following line's leading whitespace and adds one separating space when needed. It preserves existing trailing whitespace, adds no space before `)`, and does not add a second space after sentence punctuation (`nojoinspaces` behavior).
+
+`U` restores the line as it was before the first edit during the current visit. Repeating `U` toggles between that baseline and the edited line, and ordinary `u` can undo the restoration. Leaving the line, a host replacement of the draft, or a structural edit resets the baseline.
+
+### Replace mode
+
+`R` overwrites graphemes at the cursor and extends the line when it reaches the end. `Backspace` restores text overwritten in the current contiguous literal overwrite segment, including removing text appended beyond the line end. `Escape` returns to Normal mode.
+
+Each contiguous literal overwrite segment is one undo unit, **not** the entire session from `R` to `Escape`. Navigation, newline insertion with `Shift+Enter`, completion, and host/control chords end the current undo/restoration segment without leaving Replace mode; subsequent `Backspace` does not restore text from earlier segments.
 
 ### Text objects
 
@@ -115,7 +141,20 @@ A text object follows an operator (`diw`) or extends a Visual selection (`viw`).
 
 ### Visual mode
 
-`v` starts a character-wise selection and `V` a line-wise one; motions move the free end. `y` copies the selection to the system clipboard (and to the internal register, so `p` puts it back), `d` deletes it, and `c` deletes it and drops into Insert mode. `x` deletes like `d`, and `s` changes like `c`. `o` jumps to the other end of the selection. `Escape` cancels.
+`v` starts a character-wise selection and `V` a line-wise one; motions move the free end. `Escape` cancels.
+
+| Keys              | Meaning |
+| ----------------- | ------- |
+| `y`               | Copy the selection to the system clipboard and internal register |
+| `d` `x`           | Delete the selection |
+| `c` `s`           | Delete the selection and enter Insert mode |
+| `D` `X`           | Delete all lines touched by the selection |
+| `Y`               | Yank all lines touched by the selection |
+| `S` `C` `R`       | Change all lines touched by the selection and enter Insert mode |
+| `U` `u`           | Uppercase / lowercase the selection, preserving protected placeholder labels |
+| `J`               | Join the selected lines |
+| `o` `O`           | Swap the active and anchored selection endpoints |
+| `p` `P`           | Replace the selection with the internal register, preserving that source register |
 
 A selection that would cut through an attachment placeholder such as `[Image #1, 800x600]` or `[Paste #2, +30 lines]` takes the whole placeholder with it, so a delete can never leave a corrupt fragment behind.
 
@@ -123,8 +162,10 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 
 `Escape` is shared with the app-level interrupt, so Vim mode takes it only when it has something to do:
 
-- **Insert mode** → switch to Normal mode.
+- **Insert or Replace mode** → switch to Normal mode.
 - **Visual mode**, or a half-typed count or operator → cancel back to a quiet Normal mode.
 - **Normal mode with nothing pending** → falls through to its usual meaning (dismiss autocomplete, abort the running turn, clear the draft).
 
 Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+
+Normal-mode `K`, `N`, `Q`, and `Z` commands are not implemented. This editor does not provide Vim's external keyword lookup, search-repeat, Ex mode, or file/window commands.

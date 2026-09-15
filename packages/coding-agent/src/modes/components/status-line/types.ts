@@ -1,3 +1,4 @@
+import type { VimMode } from "@oh-my-pi/pi-tui/vim";
 import type { CollabSessionState } from "../../../collab/protocol";
 import type {
 	ContextLineMode,
@@ -100,7 +101,7 @@ export interface SegmentContext {
 	} | null;
 	/** Modal editing state, or null when `tui.vimMode` is off. */
 	vim: {
-		mode: "insert" | "normal" | "visual" | "visual-line";
+		mode: VimMode;
 		/** Half-typed operator/count (`"2d"`), empty when nothing is pending. */
 		pending: string;
 		/** Lines spanned by the active Visual selection; 0 outside Visual modes. */

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+
+- Expanded built-in Vim editing with whitespace-delimited `W`/`B`/`E` motions across lines, `X`/`S`/`Y`/`J`/`U`, line-local `f`/`F`/`t`/`T` finds and `;`/`,` repeats, and `H`/`M`/`L` over visible logical prompt lines.
+- Added Vim Replace mode (`R`) with grapheme overwrite, end-of-line extension, and Backspace restoration within each contiguous overwrite segment; each segment is one undo unit.
+- Added Visual uppercase line operations, `U`/`u` case conversion that preserves protected placeholder labels, `O` endpoint swapping, and register-preserving selection replacement with `p`/`P`.
+
+### Fixed
+
+- Kitty-protocol Shift+ASCII letters now retain their uppercase text when the terminal omits alternate key fields, so uppercase Vim commands work with those key reports.
+- Vim registers now preserve characterwise versus linewise selection shape, so a characterwise yank containing a newline is pasted characterwise rather than as whole lines.
+
 ## [18.2.0] - 2026-09-15
 
 ### Added

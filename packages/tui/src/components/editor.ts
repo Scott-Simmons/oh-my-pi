@@ -12,7 +12,7 @@ import {
 import { BracketedPasteHandler, decodeReencodedPasteControls } from "../bracketed-paste";
 import { canonicalKeyId, getKeybindings, type KeybindingsManager } from "../keybindings";
 import { extractPrintableText, matchesKey, parseKey } from "../keys";
-import { KillRing } from "../kill-ring";
+import { KillRing, type KillRingEntry } from "../kill-ring";
 import type { SymbolTheme } from "../symbols";
 import { type Component, CURSOR_MARKER, type Focusable } from "../tui";
 import {
@@ -30,6 +30,7 @@ import {
 import {
 	lastGraphemeStart,
 	nextGraphemeStart,
+	prevGraphemeStart,
 	type VimCommand,
 	type VimMode,
 	type VimPosition,
@@ -1983,7 +1984,10 @@ export class Editor implements Component, Focusable {
 
 		// Control chords carry no printable text and stay with the host.
 		const printable = extractPrintableText(data);
-		if (!printable) return false;
+		if (!printable) {
+			if (vim.pending) this.#runVimKey("escape", vim);
+			return false;
+		}
 
 		// Batched stdin can deliver several keystrokes at once, so replay the run one grapheme at a
 		// time. A command that drops out of Normal mode part-way (`iabc`) turns the rest of the run
@@ -2024,11 +2028,10 @@ export class Editor implements Component, Focusable {
 					break;
 				case "yank": {
 					const body = this.#sliceRange(command.from, command.to, command.linewise);
-					// The trailing newline is what marks a register linewise, so `p` puts it back as
-					// whole lines rather than splicing it mid-line.
+					// Keep clipboard text newline-terminated, but preserve register shape separately.
 					const text = command.linewise ? `${body}\n` : body;
 					if (text) {
-						this.#killRing.push(text, { prepend: false });
+						this.#killRing.push(text, { prepend: false, linewise: command.linewise });
 						this.onYank?.(text);
 					}
 					break;
@@ -2040,10 +2043,13 @@ export class Editor implements Component, Focusable {
 					this.#openVimLine(command.below);
 					break;
 				case "paste":
-					this.#pasteVimRegister(command.after, command.count);
+					this.#pasteVimRegister(command.after, command.count, command.selection);
 					break;
 				case "undo":
 					this.#applyUndo();
+					break;
+				case "join":
+					this.#joinVimLines(command.fromLine, command.toLine);
 					break;
 			}
 		}
@@ -2088,7 +2094,7 @@ export class Editor implements Component, Focusable {
 			const removed = this.#sliceRange(from, to, true);
 			if (!removed && from.line === last && lines.length === 1) return;
 			this.#recordUndoState();
-			this.#killRing.push(`${removed}\n`, { prepend: false });
+			this.#killRing.push(`${removed}\n`, { prepend: false, linewise: true });
 			lines.splice(from.line, last - from.line + 1);
 			if (lines.length === 0) lines.push("");
 			this.#state.cursorLine = Math.min(from.line, lines.length - 1);
@@ -2138,13 +2144,20 @@ export class Editor implements Component, Focusable {
 		this.#afterVimEdit();
 	}
 
-	#pasteVimRegister(after: boolean, count: number): void {
-		const entry = this.#killRing.peek();
+	#pasteVimRegister(
+		after: boolean,
+		count: number,
+		selection?: { from: VimPosition; to: VimPosition; linewise: boolean },
+	): void {
+		const entry = this.#killRing.peekEntry();
 		if (!entry) return;
 		this.#recordUndoState();
-		const linewise = entry.endsWith("\n");
-		if (linewise) {
-			const body = entry.slice(0, -1).split("\n");
+		if (selection !== undefined) {
+			this.#replaceVimSelection(entry, count, selection);
+			return;
+		}
+		if (entry.linewise) {
+			const body = entry.text.slice(0, -1).split("\n");
 			const at = after ? this.#state.cursorLine + 1 : this.#state.cursorLine;
 			const payload: string[] = [];
 			for (let i = 0; i < count; i++) payload.push(...body);
@@ -2153,11 +2166,84 @@ export class Editor implements Component, Focusable {
 			this.#setCursorCol(0);
 		} else {
 			const line = this.#state.lines[this.#state.cursorLine] ?? "";
-			const at = after ? nextGraphemeStart(line, this.#state.cursorCol) : this.#state.cursorCol;
-			const payload = entry.repeat(count);
-			this.#state.lines[this.#state.cursorLine] = line.slice(0, at) + payload + line.slice(at);
-			this.#setCursorCol(at + payload.length - 1);
+			let at = after ? nextGraphemeStart(line, this.#state.cursorCol) : this.#state.cursorCol;
+			const token = this.#atomicTokenAt(line, this.#state.cursorCol);
+			if (token !== undefined) at = after ? token.end : token.start;
+			const payload = entry.text.repeat(count);
+			if (payload.includes("\n")) {
+				const replacement = (line.slice(0, at) + payload + line.slice(at)).split("\n");
+				this.#state.lines.splice(this.#state.cursorLine, 1, ...replacement);
+				this.#setCursorCol(at);
+			} else {
+				this.#state.lines[this.#state.cursorLine] = line.slice(0, at) + payload + line.slice(at);
+				this.#setCursorCol(prevGraphemeStart(this.#state.lines[this.#state.cursorLine] ?? "", at + payload.length));
+			}
 		}
+		this.#afterVimEdit();
+	}
+
+	#replaceVimSelection(
+		entry: KillRingEntry,
+		count: number,
+		selection: { from: VimPosition; to: VimPosition; linewise: boolean },
+	): void {
+		const { from, to, linewise } = selection;
+		const lines = this.#state.lines;
+		const last = Math.min(to.line, lines.length - 1);
+		let payload = entry.text.repeat(count);
+		if (linewise) {
+			if (entry.linewise) payload = payload.slice(0, -1);
+			lines.splice(from.line, last - from.line + 1, ...payload.split("\n"));
+			this.#state.cursorLine = from.line;
+			this.#setCursorCol(entry.linewise ? Math.max(0, (lines[from.line] ?? "").search(/\S/u)) : 0);
+		} else {
+			const firstText = lines[from.line] ?? "";
+			const lastText = lines[last] ?? "";
+			const startToken = this.#atomicTokenAt(firstText, from.col);
+			const endToken = to.col > 0 ? this.#atomicTokenAt(lastText, to.col - 1) : undefined;
+			const start = startToken?.start ?? from.col;
+			const end = endToken?.end ?? to.col;
+			const head = firstText.slice(0, start);
+			const tail = lastText.slice(end);
+			if (entry.linewise) {
+				// A linewise register remains whole lines even in a characterwise selection.
+				payload = `\n${payload.slice(0, -1)}${tail ? "\n" : ""}`;
+			}
+			const replacement = (head + payload + tail).split("\n");
+			lines.splice(from.line, last - from.line + 1, ...replacement);
+			this.#state.cursorLine = from.line + (entry.linewise ? 1 : 0);
+			const col = entry.linewise
+				? Math.max(0, (lines[this.#state.cursorLine] ?? "").search(/\S/u))
+				: payload.includes("\n")
+					? start
+					: prevGraphemeStart(replacement[0] ?? "", start + payload.length);
+			this.#setCursorCol(col);
+		}
+		this.#afterVimEdit();
+	}
+
+	#joinVimLines(fromLine: number, toLine: number): void {
+		const lines = this.#state.lines;
+		const last = Math.min(toLine, lines.length - 1);
+		if (last <= fromLine) return;
+		let joined = lines[fromLine] ?? "";
+		let cursorCol = joined.length;
+		for (let i = fromLine + 1; i <= last; i++) {
+			const next = lines[i] ?? "";
+			let start = next.length - next.trimStart().length;
+			const token = start > 0 ? this.#atomicTokenAt(next, start - 1) : undefined;
+			if (token !== undefined) start = token.start;
+			const body = next.slice(start);
+			cursorCol = joined.length;
+			if (joined && body && !/\s$/.test(joined) && !body.startsWith(")")) {
+				joined += " ";
+			}
+			joined += body;
+		}
+		this.#recordUndoState();
+		lines.splice(fromLine, last - fromLine + 1, joined);
+		this.#state.cursorLine = fromLine;
+		this.#setCursorCol(cursorCol);
 		this.#afterVimEdit();
 	}
 
@@ -2391,6 +2477,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#notifyChange(text?: string): void {
+		if (this.#vim?.pending) this.#runVimKey("escape", this.#vim);
 		this.#textRevision++;
 		this.onChange?.(text ?? this.getText());
 	}

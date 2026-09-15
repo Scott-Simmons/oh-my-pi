@@ -4,6 +4,7 @@
 
 ### Added
 
+- Expanded built-in Vim editing with WORD and character-find motions, uppercase line edits, joining, and register-preserving Visual paste.
 - Sloppy edits support `<SM:AFTER>` to insert new lines after an anchor without repeating or replacing it.
 
 ### Changed

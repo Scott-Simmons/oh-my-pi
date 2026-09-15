@@ -75,4 +75,16 @@ describe("CustomEditor vim mode", () => {
 		editor.handleInput(" ");
 		expect(editor.getText()).toBe(" ");
 	});
+
+	it("cancels a pending character find before allowing Escape to interrupt", () => {
+		const { editor, state } = makeEditor(true);
+		editor.setText("draft");
+		editor.handleInput(ESC);
+		editor.handleInput("F");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(0);
+		expect(editor.vimPending).toBe("");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(1);
+	});
 });

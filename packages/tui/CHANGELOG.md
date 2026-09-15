@@ -4,8 +4,8 @@
 
 ### Added
 
-- Added Vim `U` to restore the current line's first-edit baseline during a visit, with repeat toggling and ordinary undo support.
-- Added Visual `U`/`u` case conversion that preserves protected placeholder labels.
+- Added Vim `U` to restore the current line's first-edit baseline during a visit, with repeat toggling and ordinary undo support ([#12145](https://github.com/can1357/oh-my-pi/pull/12145) by [@Scott-Simmons](https://github.com/Scott-Simmons)).
+- Added Visual `U`/`u` case conversion that preserves protected placeholder labels ([#12145](https://github.com/can1357/oh-my-pi/pull/12145) by [@Scott-Simmons](https://github.com/Scott-Simmons)).
 
 ## [18.2.0] - 2026-09-15
 

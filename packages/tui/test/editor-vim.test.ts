@@ -674,4 +674,100 @@ describe("Editor vim mode", () => {
 			expect(cursor(editor)).toEqual({ line: 2, col: 17 });
 		});
 	});
+
+	describe("line restoration with U", () => {
+		it("restores all edits on the current line without restoring another line", () => {
+			const editor = vimEditor("abcd\nother");
+			editor.handleInput("xj0x");
+			editor.handleInput("lx");
+			expect(editor.getText()).toBe("bcd\nter");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("bcd\nother");
+		});
+
+		it("toggles between the original line and its edited contents", () => {
+			const editor = vimEditor("abcd");
+			editor.handleInput("xlx");
+			expect(editor.getText()).toBe("bd");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("abcd");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("bd");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("abcd");
+		});
+
+		it("makes line restoration undoable with lowercase u", () => {
+			const editor = vimEditor("abcd");
+			editor.handleInput("xxU");
+			expect(editor.getText()).toBe("abcd");
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("cd");
+		});
+
+		it("starts a new baseline after leaving and revisiting the line", () => {
+			const editor = vimEditor("abcd\nother");
+			editor.handleInput("xjk0x");
+			expect(editor.getText()).toBe("cd\nother");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("bcd\nother");
+		});
+
+		it("discards stale line restoration when the host replaces the prompt", () => {
+			const editor = vimEditor("old");
+			editor.handleInput("x");
+			editor.setText("fresh");
+			editor.handleInput("ggUx");
+			expect(editor.getText()).toBe("resh");
+			editor.handleInput("U");
+			expect(editor.getText()).toBe("fresh");
+		});
+
+		it("cancels pending operators instead of restoring the line with U", () => {
+			for (const command of ["dU", "yU", "cU", "2dU", "d2U", "2d3U"]) {
+				const editor = vimEditor("abcd");
+				editor.handleInput("x");
+				editor.handleInput(command);
+				expect(editor.getText()).toBe("bcd");
+				expect(editor.vimMode).toBe("normal");
+				expect(editor.vimConsumesEscape()).toBe(false);
+				editor.handleInput("U");
+				expect(editor.getText()).toBe("abcd");
+			}
+		});
+	});
+
+	describe("Visual uppercase edits", () => {
+		it("uppercases a character selection with Unicode case expansion", () => {
+			const editor = vimEditor("straße tail");
+			editor.handleInput("v5lU");
+			expect(editor.getText()).toBe("STRASSE tail");
+			expect(editor.vimMode).toBe("normal");
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("straße tail");
+		});
+
+		it("Visual lowercase u changes case instead of invoking normal-mode undo", () => {
+			const editor = vimEditor("MIXED tail");
+			editor.handleInput("v4lu");
+			expect(editor.getText()).toBe("mixed tail");
+			expect(editor.vimMode).toBe("normal");
+		});
+
+		it("uppercases a reversed multiline character selection without widening it to whole lines", () => {
+			const editor = vimEditor("ab\ncd\nef");
+			editor.handleInput("jlvkU");
+			expect(editor.getText()).toBe("aB\nCD\nef");
+		});
+
+		it("linewise case conversion leaves atomic attachment labels intact", () => {
+			const original = "ab [Image #1, 800x600] cd\nef";
+			const editor = vimEditor(original);
+			editor.atomicTokenPattern = /\[Image #\d+, \d+x\d+\]/g;
+			editor.handleInput("VjU");
+			expect(editor.getText()).toBe("AB [Image #1, 800x600] CD\nEF");
+			editor.handleInput("u");
+			expect(editor.getText()).toBe(original);
+		});
+	});
 });

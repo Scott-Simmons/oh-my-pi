@@ -38,7 +38,9 @@ export type VimCommand =
 	| { kind: "delete"; from: VimPosition; to: VimPosition; linewise: boolean; insert: boolean }
 	| { kind: "openLine"; below: boolean }
 	| { kind: "paste"; after: boolean; count: number }
-	| { kind: "undo" };
+	| { kind: "undo" }
+	| { kind: "undoLine" }
+	| { kind: "case"; from: VimPosition; to: VimPosition; linewise: boolean; upper: boolean };
 
 const segmenter = getSegmenter();
 
@@ -589,6 +591,11 @@ export class VimState {
 		const line = buf.lines[buf.cursorLine] ?? "";
 		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
 
+		if (this.#operator !== null && key !== this.#operator && key !== "g") {
+			this.#clearPending();
+			return [];
+		}
+
 		switch (key) {
 			case "g":
 				this.#pendingG = true;
@@ -683,6 +690,9 @@ export class VimState {
 			case "u":
 				this.#takeCount();
 				return [{ kind: "undo" }];
+			case "U":
+				this.#takeCount();
+				return [{ kind: "undoLine" }];
 			default:
 				// Normal mode swallows unknown printable keys rather than typing them into the buffer.
 				this.#clearPending();
@@ -712,6 +722,17 @@ export class VimState {
 			case "o": {
 				this.anchor = { line: buf.cursorLine, col: buf.cursorCol };
 				return [{ kind: "move", to: anchor }];
+			}
+			case "U":
+			case "u": {
+				const { from, to } = visualRange(buf, anchor, linewise);
+				this.#clearPending();
+				this.anchor = null;
+				this.mode = "normal";
+				return [
+					{ kind: "case", from, to, linewise, upper: key === "U" },
+					{ kind: "mode", mode: "normal" },
+				];
 			}
 			case "y":
 			case "d":

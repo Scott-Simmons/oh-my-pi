@@ -99,6 +99,9 @@ The prompt then starts in Insert mode and behaves exactly as it always has. `Esc
 | `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
 | `p` `P`                       | Put the last yank or delete after / before the cursor          |
 | `u`                           | Undo                                                            |
+| `U`                           | Restore the current line's baseline; repeating `U` toggles the restoration |
+
+`U` restores the line as it was before the first edit during the current visit. Repeating `U` toggles between that baseline and the edited line, and ordinary `u` can undo the restoration. Leaving the line, a host replacement of the draft, or a structural edit resets the baseline.
 
 ### Text objects
 
@@ -116,6 +119,8 @@ A text object follows an operator (`diw`) or extends a Visual selection (`viw`).
 ### Visual mode
 
 `v` starts a character-wise selection and `V` a line-wise one; motions move the free end. `y` copies the selection to the system clipboard (and to the internal register, so `p` puts it back), `d` deletes it, and `c` deletes it and drops into Insert mode. `x` deletes like `d`, and `s` changes like `c`. `o` jumps to the other end of the selection. `Escape` cancels.
+
+`U` uppercases the selection and `u` lowercases it, preserving protected placeholder labels. Both return to Normal mode.
 
 A selection that would cut through an attachment placeholder such as `[Image #1, 800x600]` or `[Paste #2, +30 lines]` takes the whole placeholder with it, so a delete can never leave a corrupt fragment behind.
 

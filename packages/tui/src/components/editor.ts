@@ -30,6 +30,7 @@ import {
 import {
 	lastGraphemeStart,
 	nextGraphemeStart,
+	prevGraphemeStart,
 	type VimCommand,
 	type VimMode,
 	type VimPosition,
@@ -562,6 +563,8 @@ export class Editor implements Component, Focusable {
 	/** Vim-style modal editing (opt-in, see the `tui.vimMode` setting). `null` when disabled, in
 	 *  which case every code path below behaves exactly as it did before the mode existed. */
 	#vim: VimState | null = null;
+	/** Original line for U, valid only until this logical-line visit ends. */
+	#vimLineUndo: { line: number; text: string; lineCount: number } | null = null;
 	/** Called with the selected text when Visual mode yanks, so hosts can reach the system
 	 *  clipboard — `packages/tui` deliberately has no clipboard dependency of its own. */
 	onYank?: (text: string) => void;
@@ -781,6 +784,7 @@ export class Editor implements Component, Focusable {
 	setVimMode(enabled: boolean): void {
 		if (enabled === (this.#vim !== null)) return;
 		this.#vim = enabled ? new VimState() : null;
+		this.#vimLineUndo = null;
 		if (this.#vim) this.#vim.mode = "insert";
 		this.invalidate();
 	}
@@ -954,6 +958,7 @@ export class Editor implements Component, Focusable {
 	}
 	/** Internal setText that doesn't reset history state - used by navigateHistory */
 	#setTextInternal(text: string, cursorAnchor: HistoryCursorAnchor = "end"): void {
+		this.#vimLineUndo = null;
 		this.#undoStack.length = 0;
 		const lines = sanitizeLoadedText(text).split("\n");
 		this.#state.lines = lines.length === 0 ? [""] : lines;
@@ -2045,6 +2050,12 @@ export class Editor implements Component, Focusable {
 				case "undo":
 					this.#applyUndo();
 					break;
+				case "undoLine":
+					this.#undoVimLine();
+					break;
+				case "case":
+					this.#changeVimCase(command.from, command.to, command.linewise, command.upper);
+					break;
 			}
 		}
 		this.#clampVimCursor();
@@ -2090,6 +2101,7 @@ export class Editor implements Component, Focusable {
 			this.#recordUndoState();
 			this.#killRing.push(`${removed}\n`, { prepend: false });
 			lines.splice(from.line, last - from.line + 1);
+			this.#vimLineUndo = null;
 			if (lines.length === 0) lines.push("");
 			this.#state.cursorLine = Math.min(from.line, lines.length - 1);
 			this.#setCursorCol(0);
@@ -2158,6 +2170,64 @@ export class Editor implements Component, Focusable {
 			this.#state.lines[this.#state.cursorLine] = line.slice(0, at) + payload + line.slice(at);
 			this.#setCursorCol(at + payload.length - 1);
 		}
+		this.#afterVimEdit();
+	}
+
+	#undoVimLine(): void {
+		const saved = this.#vimLineUndo;
+		if (saved === null || saved.line !== this.#state.cursorLine || saved.lineCount !== this.#state.lines.length) {
+			this.#vimLineUndo = null;
+			return;
+		}
+		const current = this.#state.lines[saved.line] ?? "";
+		if (current === saved.text) return;
+		this.#recordUndoState();
+		this.#state.lines[saved.line] = saved.text;
+		saved.text = current;
+		const restored = this.#state.lines[saved.line] ?? "";
+		this.#setCursorCol(prevGraphemeStart(restored, Math.min(this.#state.cursorCol + 1, restored.length)));
+		this.#afterVimEdit();
+	}
+
+	#changeVimCase(from: VimPosition, to: VimPosition, linewise: boolean, upper: boolean): void {
+		const lines = this.#state.lines;
+		let changed = false;
+		for (let i = from.line; i <= Math.min(to.line, lines.length - 1); i++) {
+			const line = lines[i] ?? "";
+			const start = linewise || i !== from.line ? 0 : from.col;
+			const end = linewise || i !== to.line ? line.length : to.col;
+			let result = line.slice(0, start);
+			let at = start;
+			const re = this.#getAtomicTokenRe();
+			if (re !== undefined) {
+				re.lastIndex = 0;
+				for (;;) {
+					const match = re.exec(line);
+					if (match === null || match.index >= end) break;
+					if (match[0].length === 0) {
+						re.lastIndex = match.index + 1;
+						continue;
+					}
+					const tokenEnd = match.index + match[0].length;
+					if (tokenEnd <= at) continue;
+					const text = line.slice(at, Math.max(at, match.index));
+					result += upper ? text.toUpperCase() : text.toLowerCase();
+					const stop = Math.min(tokenEnd, end);
+					result += line.slice(Math.max(at, match.index), stop);
+					at = stop;
+				}
+			}
+			const text = line.slice(at, end);
+			result += upper ? text.toUpperCase() : text.toLowerCase();
+			result += line.slice(end);
+			if (result === line) continue;
+			if (!changed) this.#recordUndoState();
+			changed = true;
+			lines[i] = result;
+		}
+		if (!changed) return;
+		if (from.line !== to.line) this.#vimLineUndo = null;
+		this.#moveVimCursor(from);
 		this.#afterVimEdit();
 	}
 
@@ -2391,6 +2461,12 @@ export class Editor implements Component, Focusable {
 	}
 
 	#notifyChange(text?: string): void {
+		if (
+			this.#vimLineUndo !== null &&
+			(this.#vimLineUndo.line !== this.#state.cursorLine || this.#vimLineUndo.lineCount !== this.#state.lines.length)
+		) {
+			this.#vimLineUndo = null;
+		}
 		this.#textRevision++;
 		this.onChange?.(text ?? this.getText());
 	}
@@ -2932,6 +3008,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#submitValue(): void {
+		this.#vimLineUndo = null;
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
@@ -3083,6 +3160,9 @@ export class Editor implements Component, Focusable {
 	 * Use this for all non-vertical cursor movements to reset sticky column behavior.
 	 */
 	#setCursorCol(col: number): void {
+		if (this.#vimLineUndo !== null && this.#vimLineUndo.line !== this.#state.cursorLine) {
+			this.#vimLineUndo = null;
+		}
 		this.#state.cursorCol = col;
 		this.#preferredVisualCol = null;
 	}
@@ -3127,6 +3207,9 @@ export class Editor implements Component, Focusable {
 
 			// Set cursor position, snapping to a grapheme boundary in the target text
 			this.#state.cursorLine = targetVL.logicalLine;
+			if (this.#vimLineUndo !== null && this.#vimLineUndo.line !== this.#state.cursorLine) {
+				this.#vimLineUndo = null;
+			}
 			const targetCol = targetVL.startCol + offsetAtVisualCol(targetText, moveToVisualCol);
 			this.#state.cursorCol = Math.min(targetCol, targetLine.length);
 		}
@@ -3204,6 +3287,13 @@ export class Editor implements Component, Focusable {
 
 	#recordUndoState(): void {
 		if (this.#suspendUndo) return;
+		if (this.#vim !== null && this.#vimLineUndo === null) {
+			this.#vimLineUndo = {
+				line: this.#state.cursorLine,
+				text: this.#state.lines[this.#state.cursorLine] ?? "",
+				lineCount: this.#state.lines.length,
+			};
+		}
 		this.#undoStack.push(structuredClone(this.#state));
 		if (this.#undoStack.length > MAX_UNDO_STACK) {
 			this.#undoStack.shift();
@@ -3211,6 +3301,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#applyUndo(): void {
+		this.#vimLineUndo = null;
 		const snapshot = this.#undoStack.pop();
 		if (!snapshot) return;
 

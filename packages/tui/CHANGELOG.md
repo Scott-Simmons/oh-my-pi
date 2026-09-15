@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Vim `U` to restore the current line's first-edit baseline during a visit, with repeat toggling and ordinary undo support.
+- Added Visual `U`/`u` case conversion that preserves protected placeholder labels.
+
 ## [18.2.0] - 2026-09-15
 
 ### Added

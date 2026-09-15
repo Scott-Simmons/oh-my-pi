@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Vim `H`/`M`/`L` motions over fresh visible logical prompt lines, including counted linewise operators.
+
 ## [18.2.0] - 2026-09-15
 
 ### Added

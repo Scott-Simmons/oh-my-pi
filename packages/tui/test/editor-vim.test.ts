@@ -674,4 +674,92 @@ describe("Editor vim mode", () => {
 			expect(cursor(editor)).toEqual({ line: 2, col: 17 });
 		});
 	});
+
+	describe("viewport motions", () => {
+		it("H M and L use the actually rendered scrolled viewport", () => {
+			const editor = vimEditor("  zero\n  one\n  two\n  three\n  four\n  five\n  six");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(3);
+			editor.handleInput("4j");
+			editor.render(30);
+			editor.handleInput("H");
+			expect(cursor(editor)).toEqual({ line: 2, col: 2 });
+			editor.handleInput("L");
+			expect(cursor(editor)).toEqual({ line: 4, col: 2 });
+			editor.handleInput("M");
+			expect(cursor(editor)).toEqual({ line: 3, col: 2 });
+		});
+
+		it("counts distinct logical lines rather than wrapped rows in the viewport", () => {
+			const editor = vimEditor("abcdefghijkl\none\ntwo\nthree\nfour");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(5);
+			editor.render(4);
+			editor.handleInput("M");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+			editor.handleInput("2H");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+			editor.handleInput("L");
+			expect(cursor(editor)).toEqual({ line: 2, col: 0 });
+			editor.handleInput("2L");
+			expect(cursor(editor)).toEqual({ line: 1, col: 0 });
+		});
+
+		it("applies viewport motions to operators rather than only moving the cursor", () => {
+			const editor = vimEditor("zero\none\ntwo\nthree\nfour\nfive");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(3);
+			editor.handleInput("4j");
+			editor.render(20);
+			editor.handleInput("dH");
+			expect(editor.getText()).toBe("zero\none\nfive");
+		});
+
+		it("multiplies operator and H counts instead of concatenating them", () => {
+			const editor = vimEditor("zero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(10);
+			editor.render(20);
+			editor.handleInput("2d3H");
+			expect(editor.getText()).toBe("six\nseven\neight\nnine");
+		});
+
+		it("multiplies operator and L counts when yanking visible lines", () => {
+			const editor = vimEditor("zero\none\ntwo\nthree\nfour\nfive\nsix\nseven\neight\nnine");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(10);
+			let yanked = "";
+			editor.onYank = text => {
+				yanked = text;
+			};
+			editor.render(20);
+			editor.handleInput("2y3L");
+			expect(yanked).toBe("zero\none\ntwo\nthree\nfour\n");
+		});
+
+		it("falls back to the whole buffer before the first render", () => {
+			const editor = vimEditor("zero\none\ntwo\nthree\nfour");
+			editor.handleInput("M");
+			expect(cursor(editor)).toEqual({ line: 2, col: 0 });
+			editor.handleInput("L");
+			expect(cursor(editor)).toEqual({ line: 4, col: 0 });
+			editor.handleInput("H");
+			expect(cursor(editor)).toEqual({ line: 0, col: 0 });
+		});
+		it("viewport motions recompute wrapped visible lines after a buffered structural edit", () => {
+			const editor = vimEditor("abcdefghijkl\none\ntwo\nthree\nfour");
+			editor.setBorderVisible(false);
+			editor.setPaddingX(0);
+			editor.setMaxHeight(5);
+			editor.render(4);
+			editor.handleInput("ddL");
+			expect(cursor(editor)).toEqual({ line: 3, col: 0 });
+			expect(editor.getText()).toBe("one\ntwo\nthree\nfour");
+		});
+	});
 });

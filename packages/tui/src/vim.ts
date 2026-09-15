@@ -25,6 +25,7 @@ export interface VimBuffer {
 	readonly lines: readonly string[];
 	readonly cursorLine: number;
 	readonly cursorCol: number;
+	readonly visibleLines?: readonly number[];
 }
 
 /**
@@ -268,6 +269,7 @@ export class VimState {
 
 	#count = "";
 	#operator: VimOperator | null = null;
+	#operatorCount = "";
 	#pendingG = false;
 	/** `i` or `a` typed after an operator or in Visual mode — waiting for the object key. */
 	#textObject: "i" | "a" | null = null;
@@ -290,7 +292,7 @@ export class VimState {
 	 * visible instead of silently swallowing the next keystroke.
 	 */
 	get pendingText(): string {
-		return `${this.#count}${this.#operator ?? ""}${this.#pendingG ? "g" : ""}${this.#textObject ?? ""}`;
+		return `${this.#operatorCount}${this.#operator ?? ""}${this.#count}${this.#pendingG ? "g" : ""}${this.#textObject ?? ""}`;
 	}
 
 	get visual(): boolean {
@@ -307,14 +309,22 @@ export class VimState {
 	#clearPending(): void {
 		this.#count = "";
 		this.#operator = null;
+		this.#operatorCount = "";
 		this.#pendingG = false;
 		this.#textObject = null;
 	}
 
+	#peekCount(): number {
+		const prefix = this.#operatorCount.length > 0 ? Number.parseInt(this.#operatorCount, 10) : 1;
+		const suffix = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		return Math.min(Number.MAX_SAFE_INTEGER, Math.max(1, prefix * suffix));
+	}
+
 	#takeCount(): number {
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
 		this.#count = "";
-		return Math.max(1, count);
+		this.#operatorCount = "";
+		return count;
 	}
 
 	/** Clamp a position so the Normal-mode cursor rests *on* a grapheme rather than past the last. */
@@ -401,7 +411,7 @@ export class VimState {
 	}
 
 	#resolveMotion(key: string, buf: VimBuffer): Motion | null {
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
 		const line = buf.lines[buf.cursorLine] ?? "";
 		const at = (col: number): VimPosition => ({ line: buf.cursorLine, col });
 
@@ -454,8 +464,26 @@ export class VimState {
 				for (let i = 0; i < count; i++) col = wordEnd(line, col);
 				return { to: at(col), inclusive: true, linewise: false };
 			}
+			case "H":
+			case "M":
+			case "L": {
+				const visible = buf.visibleLines;
+				const length = visible?.length || buf.lines.length;
+				const index =
+					key === "M"
+						? Math.floor((length - 1) / 2)
+						: key === "H"
+							? Math.min(count - 1, length - 1)
+							: Math.max(0, length - count);
+				const target = visible?.length ? visible[index]! : index;
+				return {
+					to: { line: target, col: firstNonBlank(buf.lines[target] ?? "") },
+					inclusive: false,
+					linewise: true,
+				};
+			}
 			case "G": {
-				const target = this.#count.length > 0 ? count - 1 : buf.lines.length - 1;
+				const target = this.#count.length > 0 || this.#operatorCount.length > 0 ? count - 1 : buf.lines.length - 1;
 				return {
 					to: { line: Math.max(0, Math.min(target, buf.lines.length - 1)), col: 0 },
 					inclusive: false,
@@ -587,7 +615,7 @@ export class VimState {
 
 	#handleNormalKey(key: string, buf: VimBuffer): VimCommand[] | null {
 		const line = buf.lines[buf.cursorLine] ?? "";
-		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
+		const count = this.#peekCount();
 
 		switch (key) {
 			case "g":
@@ -675,6 +703,8 @@ export class VimState {
 						true,
 					);
 				}
+				this.#operatorCount = this.#count;
+				this.#count = "";
 				this.#operator = key;
 				return [];
 			case "p":

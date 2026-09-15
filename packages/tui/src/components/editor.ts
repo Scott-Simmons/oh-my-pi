@@ -562,6 +562,7 @@ export class Editor implements Component, Focusable {
 	/** Vim-style modal editing (opt-in, see the `tui.vimMode` setting). `null` when disabled, in
 	 *  which case every code path below behaves exactly as it did before the mode existed. */
 	#vim: VimState | null = null;
+	#vimVisibleLines: number[] | undefined;
 	/** Called with the selected text when Visual mode yanks, so hosts can reach the system
 	 *  clipboard — `packages/tui` deliberately has no clipboard dependency of its own. */
 	onYank?: (text: string) => void;
@@ -781,6 +782,7 @@ export class Editor implements Component, Focusable {
 	setVimMode(enabled: boolean): void {
 		if (enabled === (this.#vim !== null)) return;
 		this.#vim = enabled ? new VimState() : null;
+		this.#vimVisibleLines = undefined;
 		if (this.#vim) this.#vim.mode = "insert";
 		this.invalidate();
 	}
@@ -954,6 +956,7 @@ export class Editor implements Component, Focusable {
 	}
 	/** Internal setText that doesn't reset history state - used by navigateHistory */
 	#setTextInternal(text: string, cursorAnchor: HistoryCursorAnchor = "end"): void {
+		this.#vimVisibleLines = undefined;
 		this.#undoStack.length = 0;
 		const lines = sanitizeLoadedText(text).split("\n");
 		this.#state.lines = lines.length === 0 ? [""] : lines;
@@ -1186,6 +1189,14 @@ export class Editor implements Component, Focusable {
 		const maxOffset = Math.max(0, layoutLines.length - visibleHeight);
 		this.#scrollOffset = Math.min(this.#scrollOffset, maxOffset);
 	}
+	#updateVimVisibleLines(layoutLines: readonly LayoutLine[], visibleHeight: number): void {
+		const visibleLines = (this.#vimVisibleLines ??= []);
+		visibleLines.length = 0;
+		for (let i = this.#scrollOffset; i < Math.min(layoutLines.length, this.#scrollOffset + visibleHeight); i++) {
+			const line = layoutLines[i]!.sourceLine;
+			if (visibleLines.at(-1) !== line) visibleLines.push(line);
+		}
+	}
 
 	render(width: number): readonly string[] {
 		const style = this.#effectiveStyle();
@@ -1204,6 +1215,7 @@ export class Editor implements Component, Focusable {
 		const visibleContentHeight = this.#getVisibleContentHeight(layoutLines.length);
 		this.#updateScrollOffset(layoutWidth, layoutLines, visibleContentHeight);
 		const visibleLayoutLines = layoutLines.slice(this.#scrollOffset, this.#scrollOffset + visibleContentHeight);
+		if (this.#vim !== null) this.#updateVimVisibleLines(layoutLines, visibleContentHeight);
 
 		const result: string[] = [];
 		// Scrollbar: shown only when content overflows and the caller opted in.
@@ -1997,10 +2009,20 @@ export class Editor implements Component, Focusable {
 	}
 
 	#runVimKey(key: string, vim: VimState): boolean {
+		if (key === "H" || key === "M" || key === "L") {
+			// Earlier keys in a buffered run can change wrapping or scroll without a paint.
+			const layoutLines = this.#layoutText(this.#lastLayoutWidth);
+			const height = this.#getVisibleContentHeight(layoutLines.length);
+			this.#updateScrollOffset(this.#lastLayoutWidth, layoutLines, height);
+			this.#updateVimVisibleLines(layoutLines, height);
+		}
 		const before = vim.mode;
 		const pendingBefore = vim.pendingText;
 		const selectedLinesBefore = this.vimSelectedLines;
-		const commands = vim.handleKey(key, this.#state);
+		const commands = vim.handleKey(
+			key,
+			this.#vimVisibleLines === undefined ? this.#state : { ...this.#state, visibleLines: this.#vimVisibleLines },
+		);
 		if (commands === null) return false;
 		this.#applyVimCommands(commands);
 		// Pending and selection size are mode chrome too: hosts echo `2d` and the Visual line count
@@ -2932,6 +2954,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#submitValue(): void {
+		this.#vimVisibleLines = undefined;
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();

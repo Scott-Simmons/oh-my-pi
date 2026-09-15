@@ -90,6 +90,7 @@ The prompt then starts in Insert mode and behaves exactly as it always has. `Esc
 | `0` `^` `$`                   | Line start / first non-blank / line end                        |
 | `w` `b` `e`                   | Next word, previous word, end of word                          |
 | `gg` `G`                      | First line, last line (`5gg` and `5G` jump to line 5)          |
+| `H` `M` `L`                   | First / middle / last visible prompt line; `2H` is the second visible line, `2L` the second from the bottom |
 | `1`–`9` prefix                | Repeat a motion or operator, e.g. `3w`, `5j`, `2dd`            |
 | `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
 | `o` `O`                       | Open a line below / above and insert                           |
@@ -99,6 +100,8 @@ The prompt then starts in Insert mode and behaves exactly as it always has. `Esc
 | `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
 | `p` `P`                       | Put the last yank or delete after / before the cursor          |
 | `u`                           | Undo                                                            |
+
+`H`/`M`/`L` use visible **logical lines of the prompt**, not transcript lines or individual wrapped screen rows. Counts apply to `H` and `L`, and operator counts multiply motion counts: `2d3H` deletes through the sixth visible logical line. They refresh the layout before moving, including after buffered edits; before the first render they use the editor's initial layout width and configured height (the whole buffer when height is unconstrained).
 
 ### Text objects
 

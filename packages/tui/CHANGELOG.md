@@ -4,8 +4,8 @@
 
 ### Added
 
-- Vim editing now supports whitespace-delimited WORD motions, character finds and repeats, multiplied operator counts, and Normal `X`/`S`/`Y`/`J` edits.
-- Visual mode adds whole-line delete/change/yank, endpoint swapping with `O`, joining, and register-preserving selection paste. Internal kill-ring entries retain characterwise or linewise shape when rotated.
+- Vim editing now supports whitespace-delimited WORD motions, character finds and repeats, multiplied operator counts, and Normal `X`/`S`/`Y`/`J` edits ([#12144](https://github.com/can1357/oh-my-pi/pull/12144) by [@Scott-Simmons](https://github.com/Scott-Simmons)).
+- Visual mode adds whole-line delete/change/yank, endpoint swapping with `O`, joining, and register-preserving selection paste. Internal kill-ring entries retain characterwise or linewise shape when rotated ([#12144](https://github.com/can1357/oh-my-pi/pull/12144) by [@Scott-Simmons](https://github.com/Scott-Simmons)).
 
 ## [18.2.0] - 2026-09-15
 

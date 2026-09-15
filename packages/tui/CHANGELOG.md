@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- Added Normal-mode `R` for grapheme-safe Replace editing, with reversible Backspace, atomic placeholder protection, split Unicode input, and one undo unit per contiguous overwrite segment. Replace arrow navigation stays within the current draft instead of browsing prompt history.
+
 ## [18.2.0] - 2026-09-15
 
 ### Added

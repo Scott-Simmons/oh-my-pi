@@ -73,14 +73,17 @@ Off by default. Turn it on with **Vim Editing Mode** in `/settings` (Interaction
 tui.vimMode: true
 ```
 
-The prompt then starts in Insert mode and behaves exactly as it always has. `Escape` switches to Normal mode; the prompt border changes color so the current mode is visible at a glance. While Vim mode is on, Insert draws a bar cursor and Normal/Visual a block — the software cursor always, the real terminal cursor via DECSCUSR under `PI_HARDWARE_CURSOR` — overriding the terminal's configured shape until the session restores it on exit. This is a useful subset of Vim, not a full implementation — enough for keyboard-only navigation and selection without adding more `Ctrl` chords that terminals, shells, and tmux already claim.
+The prompt then starts in Insert mode and behaves exactly as it always has. `Escape` switches to Normal mode; the prompt border changes color so the current mode is visible at a glance. While Vim mode is on, Insert draws a bar cursor and Normal/Replace/Visual a block — the software cursor always, the real terminal cursor via DECSCUSR under `PI_HARDWARE_CURSOR` — overriding the terminal's configured shape until the session restores it on exit. This is a useful subset of Vim, not a full implementation — enough for keyboard-only navigation and selection without adding more `Ctrl` chords that terminals, shells, and tmux already claim.
 
 | Mode        | Enter with              | Leave with                                              |
 | ----------- | ----------------------- | ------------------------------------------------------- |
 | Insert      | `i` `a` `I` `A` `o` `O` | `Escape`                                                |
-| Normal      | `Escape` from Insert    | any Insert-mode key                                     |
+| Normal      | `Escape` from another mode | an Insert, Replace, or Visual entry key              |
+| Replace     | `R` in Normal           | `Escape`                                                |
 | Visual      | `v`                     | `Escape`, or an operator (`y` `d` `c`)                  |
 | Visual line | `V`                     | `Escape`, or an operator (`y` `d` `c`)                  |
+
+The `vim` status-line segment shows `INSERT`, `NORMAL`, `REPLACE`, `VISUAL`, or `V-LINE`, plus pending commands and Visual selection height. `tui.vimModeDisplay` selects `text`, `icon`, or `none`; custom status-line presets can include `"vim"` in `statusLine.leftSegments`. Replace uses the theme's error color (red by default) for its prompt border and status label, and `icon.vimReplace` for icon display. Like the other mode icons, this symbol follows the active symbol preset and can be overridden in a theme's `symbols` map.
 
 ### Normal mode
 
@@ -94,11 +97,18 @@ The prompt then starts in Insert mode and behaves exactly as it always has. `Esc
 | `i` `a` `I` `A`               | Insert before / after cursor, at line start / line end         |
 | `o` `O`                       | Open a line below / above and insert                           |
 | `x` `D` `C`                   | Delete character, delete to line end (`2D` takes `count` lines), change to line end (`2C` likewise) |
+| `R`                           | Enter Replace mode                                             |
 | `d` `y` `c` + motion          | Operate over a motion, e.g. `dw`, `d$`, `yb`, `cw`             |
 | `dd` `yy` `cc`                | Linewise delete / yank / change                                |
 | `d` `y` `c` + text object     | Operate over a text object, e.g. `diw`, `ca(`, `ci"`, `dap`    |
 | `p` `P`                       | Put the last yank or delete after / before the cursor          |
 | `u`                           | Undo                                                            |
+
+### Replace mode
+
+`R` overwrites graphemes at the cursor and extends the line when it reaches the end. `Backspace` restores text overwritten in the current contiguous literal overwrite segment, including removing text appended beyond the line end. `Escape` returns to Normal mode.
+
+Each contiguous literal overwrite segment is one undo unit, **not** the entire session from `R` to `Escape`. Navigation, newline insertion with `Shift+Enter`, completion, and host/control chords end the current undo/restoration segment without leaving Replace mode; subsequent `Backspace` does not restore text from earlier segments.
 
 ### Text objects
 
@@ -123,8 +133,10 @@ A selection that would cut through an attachment placeholder such as `[Image #1,
 
 `Escape` is shared with the app-level interrupt, so Vim mode takes it only when it has something to do:
 
-- **Insert mode** → switch to Normal mode.
+- **Insert or Replace mode** → switch to Normal mode.
 - **Visual mode**, or a half-typed count or operator → cancel back to a quiet Normal mode.
 - **Normal mode with nothing pending** → falls through to its usual meaning (dismiss autocomplete, abort the running turn, clear the draft).
 
 Vim keys never shadow app chords: `Ctrl`-combinations, `Enter`, and `Tab` keep their normal behavior in every mode, so `Enter` still submits from Normal mode. Prompt history stays on `Up`/`Down` in Insert mode only — in Normal mode those keys are `k` and `j`, so navigating a multi-line draft never loads a previous prompt.
+
+In Replace mode, arrow keys navigate the current draft without loading prompt history, even when Replace was entered from a history-loaded prompt.

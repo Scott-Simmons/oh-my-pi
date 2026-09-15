@@ -2075,7 +2075,7 @@ export const SETTINGS_SCHEMA = {
 			description: "How the current Vim mode appears in the status line",
 			condition: "vimModeEnabled",
 			options: [
-				{ value: "text", label: "Text", description: "Full mode name — NORMAL, INSERT, VISUAL, V-LINE" },
+				{ value: "text", label: "Text", description: "Full mode name — NORMAL, INSERT, REPLACE, VISUAL, V-LINE" },
 				{ value: "icon", label: "Icon", description: "Single compact glyph per mode" },
 				{ value: "none", label: "Hidden", description: "Do not show the mode in the status line" },
 			],

@@ -621,6 +621,7 @@ export class Theme {
 			extensionInstruction: this.#symbols["icon.extensionInstruction"],
 			vimNormal: this.#symbols["icon.vimNormal"],
 			vimInsert: this.#symbols["icon.vimInsert"],
+			vimReplace: this.#symbols["icon.vimReplace"],
 			vimVisual: this.#symbols["icon.vimVisual"],
 			vimVisualLine: this.#symbols["icon.vimVisualLine"],
 			mic: this.#symbols["icon.mic"],

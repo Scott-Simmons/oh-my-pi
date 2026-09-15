@@ -7,11 +7,11 @@ import { getSegmenter, moveWordLeft, moveWordRight } from "./utils";
  * wants applied, so motions can be unit-tested without a terminal and the editor keeps sole
  * ownership of undo, atomic placeholder tokens, the kill ring, and `onChange`.
  *
- * This is a usable subset of Vim, not a reimplementation of it (see issue #3299): Normal and Visual
- * modes, the common motions, and operators built from those motions.
+ * This is a usable subset of Vim, not a reimplementation of it (see issue #3299): modal editing,
+ * common motions, and operators built from those motions.
  */
 
-export type VimMode = "insert" | "normal" | "visual" | "visual-line";
+export type VimMode = "insert" | "normal" | "visual" | "visual-line" | "replace";
 
 export type VimOperator = "d" | "y" | "c";
 
@@ -333,7 +333,7 @@ export class VimState {
 	 */
 	handleKey(key: string, buf: VimBuffer): VimCommand[] | null {
 		if (key === "escape") return this.#handleEscape(buf);
-		if (this.mode === "insert") return null;
+		if (this.mode === "insert" || this.mode === "replace") return null;
 
 		// Count prefix. `0` is the line-start motion unless it extends a count already being typed.
 		if ((key >= "1" && key <= "9") || (key === "0" && this.#count.length > 0)) {
@@ -388,7 +388,7 @@ export class VimState {
 				{ kind: "move", to: this.#clampNormal(buf, cursorOf(buf)) },
 			];
 		}
-		if (this.mode === "insert") {
+		if (this.mode === "insert" || this.mode === "replace") {
 			this.mode = "normal";
 			const text = buf.lines[buf.cursorLine] ?? "";
 			return [
@@ -589,10 +589,19 @@ export class VimState {
 		const line = buf.lines[buf.cursorLine] ?? "";
 		const count = this.#count.length > 0 ? Number.parseInt(this.#count, 10) : 1;
 
+		if (this.#operator !== null && key !== this.#operator && key !== "g") {
+			this.#clearPending();
+			return [];
+		}
+
 		switch (key) {
 			case "g":
 				this.#pendingG = true;
 				return [];
+			case "R":
+				this.#clearPending();
+				this.mode = "replace";
+				return [{ kind: "mode", mode: "replace" }];
 			case "i":
 				this.#takeCount();
 				this.mode = "insert";

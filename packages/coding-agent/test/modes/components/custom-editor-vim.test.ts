@@ -75,4 +75,19 @@ describe("CustomEditor vim mode", () => {
 		editor.handleInput(" ");
 		expect(editor.getText()).toBe(" ");
 	});
+
+	it("leaves Replace mode before allowing Escape to interrupt the app", () => {
+		const { editor, state } = makeEditor(true);
+		editor.setText("draft");
+		editor.handleInput(ESC);
+		editor.handleInput("0R");
+		editor.handleInput("D");
+		expect(editor.getText()).toBe("Draft");
+		expect(editor.vimMode).toBe("replace");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(0);
+		expect(editor.vimMode).toBe("normal");
+		editor.handleInput(ESC);
+		expect(state.escapes).toBe(1);
+	});
 });

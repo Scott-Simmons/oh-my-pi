@@ -674,4 +674,165 @@ describe("Editor vim mode", () => {
 			expect(cursor(editor)).toEqual({ line: 2, col: 17 });
 		});
 	});
+
+	describe("Replace mode", () => {
+		it("cancels a pending operator without entering Replace mode", () => {
+			const editor = vimEditor("abc");
+			editor.handleInput("dR");
+			expect(editor.vimMode).toBe("normal");
+			expect(editor.vimPending).toBe("");
+			editor.handleInput("x");
+			expect(editor.getText()).toBe("bc");
+		});
+
+		it("overwrites literal command letters, extends the line, and exits on Escape", () => {
+			const editor = vimEditor("ab\nnext");
+			editor.handleInput("R");
+			expect(editor.vimMode).toBe("replace");
+			expect(editor.vimConsumesEscape()).toBe(true);
+			editor.handleInput("XYZ");
+			expect(editor.getText()).toBe("XYZ\nnext");
+			editor.handleInput(ESC);
+			expect(editor.vimMode).toBe("normal");
+			expect(editor.vimConsumesEscape()).toBe(false);
+			editor.handleInput("x");
+			expect(editor.getText()).toBe("XY\nnext");
+		});
+
+		it("Backspace removes extensions and restores overwritten text in reverse order", () => {
+			const editor = vimEditor("ab");
+			editor.handleInput("RXYZ");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("XY");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("Xb");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("ab");
+			expect(cursor(editor)).toEqual({ line: 0, col: 0 });
+			editor.handleInput("Q");
+			expect(editor.getText()).toBe("Qb");
+		});
+
+		it("undoes one complete Replace session without swallowing the preceding edit", () => {
+			const editor = vimEditor("abcd");
+			editor.handleInput("xR");
+			editor.handleInput("X");
+			editor.handleInput("Y");
+			editor.handleInput(ESC);
+			expect(editor.getText()).toBe("XYd");
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("bcd");
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("abcd");
+		});
+
+		it("segments batched Unicode replacement and restoration by grapheme", () => {
+			const original = "e\u0301👩‍💻Z";
+			const editor = vimEditor(original);
+			editor.handleInput("R🧑‍🚀a\u0308");
+			expect(editor.getText()).toBe("🧑‍🚀a\u0308Z");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("🧑‍🚀👩‍💻Z");
+			editor.handleInput(ESC);
+			editor.handleInput("u");
+			expect(editor.getText()).toBe(original);
+		});
+
+		it("replaces and restores an atomic attachment as a whole", () => {
+			const original = "[Image #1, 800x600]!";
+			const editor = vimEditor(original);
+			editor.atomicTokenPattern = /\[Image #\d+, \d+x\d+\]/g;
+			editor.handleInput("RX");
+			expect(editor.getText()).toBe("X!");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe(original);
+			editor.handleInput("Y");
+			editor.handleInput(ESC);
+			editor.handleInput("u");
+			expect(editor.getText()).toBe(original);
+		});
+	});
+
+	describe("Replace boundaries", () => {
+		it("types Kitty shifted letters literally in Insert and Replace modes", () => {
+			const editor = vimEditor("abc");
+			editor.handleInput("i");
+			editor.handleInput("\x1b[98:66;2u");
+			expect(editor.getText()).toBe("Babc");
+			editor.handleInput(ESC);
+			editor.handleInput("R");
+			editor.handleInput("\x1b[119:87;2u");
+			expect(editor.getText()).toBe("Wabc");
+		});
+
+		it("Replace arrows never load prompt history into an empty draft", () => {
+			const editor = vimEditor("");
+			editor.addToHistory("old");
+			editor.handleInput("R");
+			editor.handleInput("\x1b[A");
+			expect(editor.getText()).toBe("");
+			editor.handleInput("\x1b[B");
+			editor.handleInput("X");
+			expect(editor.getText()).toBe("X");
+			expect(editor.vimMode).toBe("replace");
+		});
+
+		it("Replace arrows stop browsing history selected in Insert mode", () => {
+			const editor = vimEditor("");
+			editor.addToHistory("older");
+			editor.addToHistory("old");
+			editor.handleInput("i");
+			editor.handleInput("\x1b[A");
+			expect(editor.getText()).toBe("old");
+			editor.handleInput(ESC);
+			editor.handleInput("0R");
+			editor.handleInput("\x1b[A");
+			expect(editor.getText()).toBe("old");
+			editor.handleInput("\x1b[B");
+			expect(editor.getText()).toBe("old");
+			expect(editor.vimMode).toBe("replace");
+		});
+
+		it("a newline starts a new Replace undo segment while retaining Replace mode", () => {
+			const editor = vimEditor("abcd\nnext");
+			editor.handleInput("RXY");
+			editor.handleInput("\x1b[13;2u");
+			expect(editor.vimMode).toBe("replace");
+			editor.handleInput("Z");
+			expect(editor.getText()).toBe("XY\nZd\nnext");
+			editor.handleInput(ESC);
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("XY\ncd\nnext");
+		});
+
+		it("Replace joins split combining input into one reversible overwrite", () => {
+			const editor = vimEditor("abc");
+			editor.handleInput("Re");
+			editor.handleInput("\u0301");
+			expect(editor.getText()).toBe("e\u0301bc");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("abc");
+			expect(cursor(editor)).toEqual({ line: 0, col: 0 });
+		});
+
+		it("Replace joins split ZWJ emoji without consuming another original grapheme", () => {
+			const editor = vimEditor("abc");
+			editor.handleInput("R👩");
+			editor.handleInput("\u200d");
+			editor.handleInput("💻");
+			expect(editor.getText()).toBe("👩‍💻bc");
+			editor.handleInput(ESC);
+			editor.handleInput("u");
+			expect(editor.getText()).toBe("abc");
+		});
+
+		it("Replace cannot leave fragments when started inside an atomic attachment", () => {
+			const editor = vimEditor("see [Image #1, 800x600]!");
+			editor.atomicTokenPattern = /\[Image #\d+, \d+x\d+\]/g;
+			editor.handleInput("wllRX");
+			expect(editor.getText()).toBe("see X!");
+			editor.handleInput("\x7f");
+			expect(editor.getText()).toBe("see [Image #1, 800x600]!");
+		});
+	});
 });

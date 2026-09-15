@@ -562,6 +562,8 @@ export class Editor implements Component, Focusable {
 	/** Vim-style modal editing (opt-in, see the `tui.vimMode` setting). `null` when disabled, in
 	 *  which case every code path below behaves exactly as it did before the mode existed. */
 	#vim: VimState | null = null;
+	/** One undo unit and a reversible overwrite trail for a contiguous Replace session. */
+	#vimReplace: Array<{ line: number; col: number; removed: string; inserted: string }> | null = null;
 	/** Called with the selected text when Visual mode yanks, so hosts can reach the system
 	 *  clipboard — `packages/tui` deliberately has no clipboard dependency of its own. */
 	onYank?: (text: string) => void;
@@ -781,6 +783,7 @@ export class Editor implements Component, Focusable {
 	setVimMode(enabled: boolean): void {
 		if (enabled === (this.#vim !== null)) return;
 		this.#vim = enabled ? new VimState() : null;
+		this.#vimReplace = null;
 		if (this.#vim) this.#vim.mode = "insert";
 		this.invalidate();
 	}
@@ -1906,9 +1909,9 @@ export class Editor implements Component, Focusable {
 		// Arrow keys
 		else if (kb.matchesCanonical(canonical, "tui.editor.cursorUp")) {
 			// Up - history navigation or cursor movement
-			if (this.#isEditorEmpty()) {
+			if (this.vimMode === "insert" && this.#isEditorEmpty()) {
 				this.#navigateHistory(-1); // Start browsing history
-			} else if (this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
+			} else if (this.vimMode === "insert" && this.#historyIndex > -1 && this.#isOnFirstVisualLine()) {
 				this.#navigateHistory(-1); // Navigate to older history entry
 			} else if (this.#isOnFirstVisualLine()) {
 				// Already at top - jump to start of line
@@ -1918,7 +1921,7 @@ export class Editor implements Component, Focusable {
 			}
 		} else if (kb.matchesCanonical(canonical, "tui.editor.cursorDown")) {
 			// Down - history navigation or cursor movement
-			if (this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
+			if (this.vimMode === "insert" && this.#historyIndex > -1 && this.#isOnLastVisualLine()) {
 				this.#navigateHistory(1); // Navigate to newer history entry or clear
 			} else if (this.#isOnLastVisualLine()) {
 				// Already at bottom - jump to end of line
@@ -1977,6 +1980,21 @@ export class Editor implements Component, Focusable {
 			return this.isShowingAutocomplete() ? false : this.#runVimKey("escape", vim);
 		}
 		if (vim.mode === "insert") return false;
+		if (vim.mode === "replace") {
+			if (canonical === "backspace" || canonical === "shift+backspace") {
+				this.#backspaceVimReplace();
+				return true;
+			}
+			const printable = extractPrintableText(data);
+			if (printable) {
+				for (const seg of segmenter.segment(printable)) this.#replaceVimCharacter(seg.segment);
+				return true;
+			}
+			// Navigation and application chords keep their ordinary dispatch, but must not
+			// restore overwritten text across a cursor move, completion, or host edit.
+			this.#vimReplace = null;
+			return false;
+		}
 
 		const mapped = canonical === undefined ? undefined : VIM_NAV_KEYS[canonical];
 		if (mapped !== undefined) return this.#runVimKey(mapped, vim);
@@ -1989,6 +2007,10 @@ export class Editor implements Component, Focusable {
 		// time. A command that drops out of Normal mode part-way (`iabc`) turns the rest of the run
 		// back into literal text rather than swallowing it.
 		for (const seg of segmenter.segment(printable)) {
+			if (this.vimMode === "replace") {
+				this.#replaceVimCharacter(seg.segment);
+				continue;
+			}
 			if (this.#runVimKey(seg.segment, vim)) continue;
 			this.#insertCharacter(printable.slice(seg.index));
 			return true;
@@ -2019,6 +2041,7 @@ export class Editor implements Component, Focusable {
 					this.#moveVimCursor(command.to);
 					break;
 				case "mode":
+					this.#vimReplace = null;
 					this.#resetKillSequence();
 					this.#preferredVisualCol = null;
 					break;
@@ -2159,6 +2182,59 @@ export class Editor implements Component, Focusable {
 			this.#setCursorCol(at + payload.length - 1);
 		}
 		this.#afterVimEdit();
+	}
+
+	#replaceVimCharacter(char: string): void {
+		this.#exitHistoryForEditing();
+		if (this.#vimReplace === null) {
+			this.#recordUndoState();
+			this.#vimReplace = [];
+		}
+		const lineIndex = this.#state.cursorLine;
+		const line = this.#state.lines[lineIndex] ?? "";
+		const previous = this.#vimReplace.at(-1);
+		const continuation =
+			previous !== undefined &&
+			previous.line === lineIndex &&
+			previous.col + previous.inserted.length === this.#state.cursorCol &&
+			(segmenter.segment(previous.inserted + char).containing(0)?.segment.length ?? 0) > previous.inserted.length;
+		if (continuation) {
+			// A terminal may deliver a combining mark or ZWJ sequence in separate input events.
+			// It extends the previous overwrite, rather than consuming another original grapheme.
+			const col = this.#state.cursorCol;
+			previous.inserted += char;
+			this.#state.lines[lineIndex] = line.slice(0, col) + char + line.slice(col);
+			this.#setCursorCol(col + char.length);
+		} else {
+			const token = this.#atomicTokenAt(line, this.#state.cursorCol);
+			const col = token?.start ?? this.#state.cursorCol;
+			const end = token?.end ?? nextGraphemeStart(line, col);
+			this.#vimReplace.push({ line: lineIndex, col, removed: line.slice(col, end), inserted: char });
+			this.#state.lines[lineIndex] = line.slice(0, col) + char + line.slice(end);
+			this.#setCursorCol(col + char.length);
+		}
+		this.#historyIndex = -1;
+		this.#resetKillSequence();
+		this.#notifyChange(undefined, true);
+	}
+
+	#backspaceVimReplace(): void {
+		const previous = this.#vimReplace?.at(-1);
+		if (previous === undefined) return;
+		if (
+			previous.line !== this.#state.cursorLine ||
+			previous.col + previous.inserted.length !== this.#state.cursorCol
+		) {
+			this.#vimReplace = null;
+			return;
+		}
+		const line = this.#state.lines[previous.line] ?? "";
+		this.#vimReplace!.pop();
+		this.#state.lines[previous.line] =
+			line.slice(0, previous.col) + previous.removed + line.slice(this.#state.cursorCol);
+		this.#setCursorCol(previous.col);
+		this.#resetKillSequence();
+		this.#notifyChange(undefined, true);
 	}
 
 	#afterVimEdit(): void {
@@ -2390,7 +2466,8 @@ export class Editor implements Component, Focusable {
 		return this.#textRevision;
 	}
 
-	#notifyChange(text?: string): void {
+	#notifyChange(text?: string, preserveReplace = false): void {
+		if (!preserveReplace) this.#vimReplace = null;
 		this.#textRevision++;
 		this.onChange?.(text ?? this.getText());
 	}
@@ -2932,6 +3009,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#submitValue(): void {
+		this.#vimReplace = null;
 		this.#resetKillSequence();
 
 		const result = this.#expandPasteMarkers(this.#state.lines.join("\n")).trim();
@@ -3204,6 +3282,7 @@ export class Editor implements Component, Focusable {
 
 	#recordUndoState(): void {
 		if (this.#suspendUndo) return;
+		this.#vimReplace = null;
 		this.#undoStack.push(structuredClone(this.#state));
 		if (this.#undoStack.length > MAX_UNDO_STACK) {
 			this.#undoStack.shift();
@@ -3211,6 +3290,7 @@ export class Editor implements Component, Focusable {
 	}
 
 	#applyUndo(): void {
+		this.#vimReplace = null;
 		const snapshot = this.#undoStack.pop();
 		if (!snapshot) return;
 

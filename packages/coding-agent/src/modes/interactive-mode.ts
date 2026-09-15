@@ -2558,10 +2558,12 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.editor.borderColor = (str: string) => theme.fg("warning", str);
 		} else if (vimMode === "normal") {
 			this.editor.borderColor = (str: string) => theme.fg("accent", str);
+		} else if (vimMode === "replace") {
+			this.editor.borderColor = (str: string) => theme.fg("error", str);
 		} else if (vimMode === "insert") {
 			// Insert gets its own colour rather than falling through to the session accent: with Normal
 			// and Visual both coloured, an uncoloured Insert made the border unreadable as a mode.
-			// Matches the `vim` status-line segment, which uses the same three colours.
+			// Matches the `vim` status-line segment.
 			this.editor.borderColor = (str: string) => theme.fg("success", str);
 		} else {
 			const accentEnabled = !isSettingsInitialized() || settings.get("statusLine.sessionAccent") !== false;
@@ -3999,8 +4001,8 @@ export class InteractiveMode implements InteractiveModeContext {
 					}
 				: undefined,
 		);
-		// Insert gets the bar every non-modal editor uses; Normal/Visual rest *on* a grapheme, which
-		// is a block. Sent unconditionally: the software cursor carries the same distinction itself
+		// Insert gets the bar every non-modal editor uses; Normal/Visual/Replace use a block.
+		// Sent unconditionally: the software cursor carries the same distinction itself
 		// (Editor#cursorCell), and when the hardware cursor is hidden this only reshapes something
 		// invisible. ProcessTerminal dedupes, so an unchanged shape costs nothing per frame.
 		this.ui.terminal.setCursorShape?.(

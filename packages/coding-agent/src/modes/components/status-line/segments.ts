@@ -811,6 +811,7 @@ const collabSegment: StatusLineSegment = {
  */
 const VIM_MODE_LABELS: Record<NonNullable<SegmentContext["vim"]>["mode"], string> = {
 	insert: "INSERT",
+	replace: "REPLACE",
 	normal: "NORMAL",
 	visual: "VISUAL",
 	"visual-line": "V-LINE",
@@ -823,6 +824,7 @@ const VIM_MODE_LABELS: Record<NonNullable<SegmentContext["vim"]>["mode"], string
  */
 const VIM_MODE_ICON_KEYS: Record<NonNullable<SegmentContext["vim"]>["mode"], SymbolKey> = {
 	insert: "icon.vimInsert",
+	replace: "icon.vimReplace",
 	normal: "icon.vimNormal",
 	visual: "icon.vimVisual",
 	"visual-line": "icon.vimVisualLine",
@@ -830,6 +832,7 @@ const VIM_MODE_ICON_KEYS: Record<NonNullable<SegmentContext["vim"]>["mode"], Sym
 
 const VIM_MODE_COLORS: Record<NonNullable<SegmentContext["vim"]>["mode"], ThemeColor> = {
 	insert: "success",
+	replace: "error",
 	normal: "accent",
 	visual: "warning",
 	"visual-line": "warning",
